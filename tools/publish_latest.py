@@ -63,11 +63,10 @@ def publish(directory, repository, commit, branch, client=gh):
     else:
         client('api', '--method', 'POST', f'{repo}/git/refs', payload={'ref': 'refs/tags/latest', 'sha': commit})
     notes = (f"Rolling development build **{manifest['version']}** from `{commit}`.\n\n"
-             'Unsigned SPKs; physical NAS acceptance is still required. Choose the DSM major version. '
-             'DSM 7 x86_64 covers both v1000 and geminilake; DSM 6 retains geminilake.\n\n'
+             'Unsigned SPKs. Choose the DSM major version. '
+             'DSM 7 x86_64 covers both v1000 and geminilake (and others); DSM 6 retains geminilake.\n\n'
              'Verify downloads against SHA256SUMS. This mutable tag and its fixed-name assets '
-             'are replaced after successful default-branch builds. Replacement is not atomic; '
-             'a failed upload can temporarily leave incomplete assets. Download again after a successful run.\n')
+             'are replaced after successful default-branch builds. Replacement is not atomic.')
     with tempfile.TemporaryDirectory() as temp:
         notes_file = Path(temp)/'notes.md'
         notes_file.write_text(notes)
