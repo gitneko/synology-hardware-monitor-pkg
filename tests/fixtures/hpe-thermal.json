@@ -1,0 +1,1 @@
+{"Name":"HPE style synthetic thermal resource","Fans":[{"MemberId":"1","Name":"Fan 1","Status":{"Health":"OK","State":"Enabled"},"Reading":32,"ReadingUnits":"Percent"},{"MemberId":"2","Name":"Fan 2","Status":{"State":"Absent"}}],"Temperatures":[{"MemberId":"3","Name":"CPU","ReadingCelsius":95,"UpperThresholdCritical":90,"Status":{"Health":"OK"}}]}

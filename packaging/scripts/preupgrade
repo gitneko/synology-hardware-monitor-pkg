@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+/var/packages/HardwareMonitor/scripts/start-stop-status stop
+/var/packages/HardwareMonitor/target/bin/hardware-monitor backup --directory "/var/packages/HardwareMonitor/etc/backup-$(date +%Y%m%d-%H%M%S)"

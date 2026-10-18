@@ -1,0 +1,437 @@
+{
+  "provenance": "Allowlisted monitoring fields from a user-authorized read-only PowerEdge R340 / iDRAC9 7.00.00.183 test. Hostnames, credentials, serials, UUIDs, network data and hardware log text omitted.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/Thermal",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Thermal",
+        "@odata.type": "#Thermal.v1_7_1.Thermal",
+        "Fans": [],
+        "Id": "Thermal",
+        "Name": "Thermal",
+        "Redundancy": [],
+        "Temperatures": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Thermal#/Temperatures/0",
+            "@odata.type": "#Thermal.v1_7_1.Temperature",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "MemberId": "0",
+            "Name": "CPU1 Temp",
+            "ReadingCelsius": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Thermal#/Temperatures/1",
+            "@odata.type": "#Thermal.v1_7_1.Temperature",
+            "LowerThresholdCritical": -7,
+            "LowerThresholdNonCritical": 3,
+            "MemberId": "1",
+            "Name": "System Board Inlet Temp",
+            "ReadingCelsius": 25,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            },
+            "UpperThresholdCritical": 47,
+            "UpperThresholdNonCritical": 43
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Thermal#/Temperatures/2",
+            "@odata.type": "#Thermal.v1_7_1.Temperature",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "MemberId": "2",
+            "Name": "System Board Exhaust Temp",
+            "ReadingCelsius": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/Power",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power",
+        "@odata.type": "#Power.v1_7_1.Power",
+        "Name": "Power",
+        "Id": "Power",
+        "PowerControl": [
+          {
+            "@odata.type": "#Power.v1_7_1.PowerControl",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerControl/0",
+            "Name": "System Power Control",
+            "MemberId": "0",
+            "PowerConsumedWatts": 6
+          }
+        ],
+        "PowerSupplies": [
+          {
+            "@odata.type": "#Power.v1_7_1.PowerSupply",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/0",
+            "Name": "PS1 Status",
+            "MemberId": "0",
+            "Redundancy": [
+              {
+                "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Redundancy/0",
+                "@odata.type": "#Redundancy.v1_4_1.Redundancy",
+                "MemberId": "0",
+                "Name": "System Board PS Redundancy",
+                "Status": {
+                  "Health": "OK",
+                  "State": "Disabled"
+                }
+              }
+            ],
+            "Status": {
+              "Health": null,
+              "State": "UnavailableOffline"
+            }
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.PowerSupply",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/1",
+            "Name": "PS2 Status",
+            "MemberId": "1",
+            "Redundancy": [
+              {
+                "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Redundancy/0",
+                "@odata.type": "#Redundancy.v1_4_1.Redundancy",
+                "MemberId": "0",
+                "Name": "System Board PS Redundancy",
+                "Status": {
+                  "Health": "OK",
+                  "State": "Disabled"
+                }
+              }
+            ],
+            "Status": {
+              "Health": null,
+              "State": "Enabled"
+            }
+          }
+        ],
+        "Redundancy": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Redundancy/0",
+            "@odata.type": "#Redundancy.v1_4_1.Redundancy",
+            "MemberId": "0",
+            "Name": "System Board PS Redundancy",
+            "Status": {
+              "Health": "OK",
+              "State": "Disabled"
+            }
+          }
+        ],
+        "Voltages": [
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/0",
+            "Name": "System Board PS1 PG FAIL",
+            "MemberId": "0",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/1",
+            "Name": "System Board PS2 PG FAIL",
+            "MemberId": "1",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/2",
+            "Name": "System Board BP1 PG",
+            "MemberId": "2",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/3",
+            "Name": "System Board 1.8V SW PG",
+            "MemberId": "3",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/4",
+            "Name": "System Board 2.5V SW PG",
+            "MemberId": "4",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/5",
+            "Name": "System Board VSB11 SW PG",
+            "MemberId": "5",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/6",
+            "Name": "System Board VSBM SW PG",
+            "MemberId": "6",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/7",
+            "Name": "System Board 3.3V B PG",
+            "MemberId": "7",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/8",
+            "Name": "CPU1 MEM012 VDDQ PG",
+            "MemberId": "8",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/9",
+            "Name": "CPU1 MEM012 VPP PG",
+            "MemberId": "9",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/10",
+            "Name": "CPU1 MEM012 VTT PG",
+            "MemberId": "10",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/11",
+            "Name": "CPU1 VCCIO PG",
+            "MemberId": "11",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/12",
+            "Name": "CPU1 VCORE PG",
+            "MemberId": "12",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/13",
+            "Name": "PS1 Voltage 1",
+            "MemberId": "13",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/14",
+            "Name": "PS2 Voltage 2",
+            "MemberId": "14",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/15",
+            "Name": "CPU1 VSA PG",
+            "MemberId": "15",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/16",
+            "Name": "System Board 5V PG",
+            "MemberId": "16",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          },
+          {
+            "@odata.type": "#Power.v1_7_1.Voltage",
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/Voltages/17",
+            "Name": "CPU1 VCORE VR",
+            "MemberId": "17",
+            "LowerThresholdCritical": null,
+            "LowerThresholdNonCritical": null,
+            "ReadingVolts": null,
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "UpperThresholdCritical": null,
+            "UpperThresholdNonCritical": null
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/System.Embedded.1/Storage/RAID.Integrated.1-1",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/System.Embedded.1/Storage/RAID.Integrated.1-1",
+        "@odata.type": "#Storage.v1_14_0.Storage",
+        "Id": "RAID.Integrated.1-1",
+        "Name": "PERC H330 Adapter",
+        "Status": {
+          "Health": null,
+          "HealthRollup": null,
+          "State": "Enabled"
+        },
+        "StorageControllers": [
+          {
+            "@odata.id": "/redfish/v1/Systems/System.Embedded.1/Storage/RAID.Integrated.1-1#/StorageControllers/0",
+            "MemberId": "0",
+            "Name": "PERC H330 Adapter",
+            "Status": {
+              "Health": null,
+              "HealthRollup": null,
+              "State": "Enabled"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

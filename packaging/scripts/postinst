@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+# etc exists on DSM 6 and 7; var/home package FHS directories require DSM 7.
+mkdir -p /var/packages/HardwareMonitor/etc/private
+chmod 700 /var/packages/HardwareMonitor/etc/private

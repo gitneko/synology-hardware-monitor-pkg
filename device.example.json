@@ -1,0 +1,10 @@
+{
+  "id": "ilo5-server01",
+  "name": "HPE ProLiant Server 01",
+  "endpoint": "https://ilo5-server01.example.invalid/",
+  "username": "hardware-monitor",
+  "interval_seconds": 60,
+  "repeat_seconds": null,
+  "alerts_enabled": true,
+  "ca_file": null
+}

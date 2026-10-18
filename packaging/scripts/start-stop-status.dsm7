@@ -1,0 +1,9 @@
+#!/bin/sh
+# SPK lifecycle entry point; all monitoring and service control run in the native binary.
+# No optional DSM resource workers are required by this development package.
+set -eu
+case "${1:-}" in
+ start) exec /var/packages/HardwareMonitor/target/bin/hardware-monitor service start ;;
+ stop|status) exec /var/packages/HardwareMonitor/target/bin/hardware-monitor service "$1" ;;
+ *) exit 1 ;;
+esac

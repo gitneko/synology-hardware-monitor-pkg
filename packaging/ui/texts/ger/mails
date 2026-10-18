@@ -1,0 +1,29 @@
+[HardwareMonitorCritical]
+Category: Hardware Monitor
+Level: NOTIFICATION_ERROR
+Title: Hardwarefehler
+Subject: Hardware Monitor: kritischer Fehler
+Desktop: %DETAIL%
+Target: desktop,mail
+
+Ein kritischer Hardware- oder Überwachungsfehler wurde erkannt. Gerätedetails stehen in Hardware Monitor.
+
+[HardwareMonitorWarning]
+Category: Hardware Monitor
+Level: NOTIFICATION_WARN
+Title: Hardwarewarnung
+Subject: Hardware Monitor: Warnung
+Desktop: %DETAIL%
+Target: desktop,mail
+
+Eine Hardwarewarnung oder unvollständige Überwachungsabdeckung wurde erkannt. Details stehen in Hardware Monitor.
+
+[HardwareMonitorRecovered]
+Category: Hardware Monitor
+Level: NOTIFICATION_INFO
+Title: Hardware-Entwarnung
+Subject: Hardware Monitor: Entwarnung
+Desktop: %DETAIL%
+Target: desktop,mail
+
+Ein zuvor gemeldeter Zustand hat sich normalisiert. Details stehen in Hardware Monitor.

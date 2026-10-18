@@ -1,0 +1,35 @@
+[package]
+name = "hardware-monitor"
+version = "0.8.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Read-only multi-vendor hardware monitoring for Synology DSM"
+rust-version = "1.98"
+
+[dependencies]
+anyhow = "1"
+aes-gcm = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+libc = "0.2"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+rand = "0.8"
+ring = "0.17"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net", "io-util", "io-std", "process"] }
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

@@ -1,0 +1,29 @@
+[HardwareMonitorCritical]
+Category: Hardware Monitor
+Level: NOTIFICATION_ERROR
+Title: Hardware fault
+Subject: Hardware Monitor: critical fault
+Desktop: %DETAIL%
+Target: desktop,mail
+
+A critical hardware or monitoring fault was detected. Open Hardware Monitor for device details.
+
+[HardwareMonitorWarning]
+Category: Hardware Monitor
+Level: NOTIFICATION_WARN
+Title: Hardware warning
+Subject: Hardware Monitor: warning
+Desktop: %DETAIL%
+Target: desktop,mail
+
+A hardware warning or incomplete monitoring coverage was detected. Open Hardware Monitor for details.
+
+[HardwareMonitorRecovered]
+Category: Hardware Monitor
+Level: NOTIFICATION_INFO
+Title: Hardware recovered
+Subject: Hardware Monitor: recovery
+Desktop: %DETAIL%
+Target: desktop,mail
+
+A previously reported condition has recovered. Open Hardware Monitor for details.

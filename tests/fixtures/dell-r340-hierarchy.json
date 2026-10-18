@@ -1,0 +1,154 @@
+{
+  "source": "Read-only verified HTTPS on 2026-10-18, server off. Status and dependency links retained; names simplified, serials synthetic for existing alias matcher.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Systems/System.Embedded.1",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/System.Embedded.1",
+        "@odata.type": "#ComputerSystem.v1_20_0.ComputerSystem",
+        "Status": {
+          "Health": "Critical",
+          "HealthRollup": "Critical",
+          "State": "StandbyOffline"
+        },
+        "PowerState": "Off",
+        "Links": {
+          "Chassis": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/System.Embedded.1"
+            }
+          ],
+          "PoweredBy": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/0"
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/1"
+            }
+          ]
+        },
+        "Name": "ComputerSystem"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1",
+        "@odata.type": "#Chassis.v1_22_0.Chassis",
+        "Status": {
+          "Health": "Critical",
+          "HealthRollup": "Critical",
+          "State": "Enabled"
+        },
+        "PowerState": "Off",
+        "Power": {
+          "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power"
+        },
+        "PowerSubsystem": {
+          "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem"
+        },
+        "ChassisType": "RackMount",
+        "Links": {
+          "PoweredBy": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/0"
+            },
+            {
+              "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/1"
+            }
+          ]
+        },
+        "Name": "Chassis"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem",
+        "@odata.type": "#PowerSubsystem.v1_1_0.PowerSubsystem",
+        "Status": {
+          "State": "Enabled",
+          "Health": null
+        },
+        "PowerSupplies": {
+          "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies"
+        },
+        "Name": "PowerSubsystem"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/Power",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power",
+        "@odata.type": "#Power.v1_7_1.Power",
+        "PowerSupplies": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/0",
+            "@odata.type": "#Power.v1_7_1.PowerSupply",
+            "Status": {
+              "Health": null,
+              "State": "UnavailableOffline"
+            },
+            "Name": "PS1 Status",
+            "MemberId": "0",
+            "SerialNumber": "SYNTHETIC-PS1"
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/Power#/PowerSupplies/1",
+            "@odata.type": "#Power.v1_7_1.PowerSupply",
+            "Status": {
+              "Health": null,
+              "State": "Enabled"
+            },
+            "Name": "PS2 Status",
+            "MemberId": "1",
+            "SerialNumber": "SYNTHETIC-PS2"
+          }
+        ],
+        "Name": "Power"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies",
+        "@odata.type": "#PowerSupplyCollection.PowerSupplyCollection",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.1"
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.2"
+          }
+        ],
+        "Name": "PowerSupplyCollection"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.1",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.1",
+        "@odata.type": "#PowerSupply.v1_5_0.PowerSupply",
+        "Status": {
+          "Health": null,
+          "State": "UnavailableOffline"
+        },
+        "SerialNumber": "SYNTHETIC-PS1",
+        "Name": "PS1 Status"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.2",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.2",
+        "@odata.type": "#PowerSupply.v1_5_0.PowerSupply",
+        "Status": {
+          "Health": null,
+          "State": "Enabled"
+        },
+        "SerialNumber": "SYNTHETIC-PS2",
+        "Name": "PS2 Status"
+      }
+    }
+  ]
+}

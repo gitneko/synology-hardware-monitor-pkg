@@ -1,0 +1,3 @@
+export function mailInput(form,revision) {
+ return {revision,password:form.password||null,settings:{language:form.language??'de',enabled:form.enabled,host:form.host.trim(),port:Number(form.port),security:form.security,username:form.authentication?form.username:'',from_address:form.from_address.trim(),from_name:form.from_name,recipients:form.recipients.split(/[\s,;]+/).filter(Boolean),subject_template:form.subject_template,body_template:form.body_template,ca_pem:form.security==='plain'?null:form.ca_pem.trim()||null,timezone:form.timezone??'UTC',date_format:form.date_format??'%d.%m.%Y %H:%M:%S'}};
+}
