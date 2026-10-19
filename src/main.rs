@@ -76,7 +76,7 @@ enum Command {
     },
     /// DSM CGI bridge with server-side role, origin and CSRF enforcement.
     Cgi,
-    /// Native DSM 6/7 lifecycle control under the package identity.
+    /// Native DSM 7 lifecycle control under the package identity.
     Service {
         #[arg(value_parser=["start","stop","status"])]
         action: String,

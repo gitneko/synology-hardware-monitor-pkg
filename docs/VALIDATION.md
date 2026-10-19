@@ -2,6 +2,12 @@
 
 Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 frontend tests. Build 0018 changes packaging/CI/documentation and adds seven isolated release-publication tests. Current package hashes and source identity are recorded in `dist/current/latest-assets/build-manifest.json` and `SHA256SUMS`; test output is retained in Actions logs. Source archives intentionally exclude `dist` and private runtime state.
 
+## Build 0026 DSM 7 packaging scope
+
+Only the DSM 7 x86_64 SPK remains in the maintained build/release set. The legacy INFO/resource/lifecycle files and launcher configuration are removed. Package assembly rejects the retired profile and checks the DSM 7 minimum version, desktop launcher and icon. Release tests cover the three-file asset set, rejection of a retired package in new assets, and cleanup of previously managed package assets only after a successful replacement upload. These release tests use a fake client; no GitHub assets are changed by local checks. The README and active documentation no longer list the former DS220+ target.
+
+The 66 Rust, 34 frontend and nine packaging/release tests passed, along with formatting and Clippy. The earlier combined patch was created before these changes and verified by applying it to its exact base and comparing every resulting tracked file with build 0025.
+
 ## Build 0025 query notification selection
 
 Regression checks cover query warning/critical alarms with hardware severity disabled, query exclusion while hardware severity stays enabled, query repeat/recovery switches, exact legacy settings behavior and serialization, both delivery queues, local history retention, restart persistence, and the actual Vue checkbox with saved and legacy choices. This change does not alter collection or controller access.
@@ -52,7 +58,7 @@ HTTPS integration runs the real collector, database, daemon and CGI against synt
 
 SMTP integration uses loopback servers for explicit plaintext, STARTTLS, implicit TLS, credentials, certificate/name failures, no downgrade, durable recipient progress and restart. A synthetic Redfish fault yields one component email, one retained-fault reminder and one recovery after grouping. No real email or desktop notification is sent by these tests.
 
-Package checks inspect both current SPKs (DSM 7 x86_64 and DSM 6 geminilake), then execute the extracted static binary locally. They validate archive structure, privileges, empty optional resources, lifecycle, CGI denial, versioned routes/assets, notification texts and new UI actions. They do not simulate DSM's installer, native language renderer or kernel.
+Package checks inspect the current DSM 7 x86_64 SPK, then execute the extracted static binary locally. They validate archive structure, privileges, empty optional resources, lifecycle, CGI denial, versioned routes/assets, notification texts and new UI actions. They do not simulate DSM's installer, native language renderer or kernel.
 
 ## User-confirmed NAS behavior
 
@@ -62,7 +68,7 @@ The English additions, new forced-language desktop keys and backup-format migrat
 
 ## Remaining hardware/operational limits
 
-Live evidence is currently concentrated on Dell R340/iDRAC9. HPE iLO 5, iDRAC7, DSM 6 and simultaneous physical faults remain unverified. Unknown/null/offline data is deliberately not classified as healthy. No complete RAID/OEM coverage, resource budget, prolonged reliability result or production security audit is claimed. See [Roadmap](ROADMAP.md), [NAS acceptance](NAS-ACCEPTANCE.md) and [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
+Live evidence is currently concentrated on Dell R340/iDRAC9. HPE iLO 5, iDRAC7 and simultaneous physical faults remain unverified. Unknown/null/offline data is deliberately not classified as healthy. No complete RAID/OEM coverage, resource budget, prolonged reliability result or production security audit is claimed. See [Roadmap](ROADMAP.md), [NAS acceptance](NAS-ACCEPTANCE.md) and [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 
 ## Build 0018 release automation
 

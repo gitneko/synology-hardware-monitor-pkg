@@ -16,15 +16,12 @@ import time
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
-p.add_argument('--profile',choices=['dsm6','dsm7'],required=True)
+p.add_argument('--profile',choices=['dsm7'],default='dsm7')
 p.add_argument('--binary',type=Path,required=True)
-p.add_argument('--arch',choices=['x86_64','geminilake','v1000'])
+p.add_argument('--arch',choices=['x86_64','geminilake','v1000'],default='x86_64')
 p.add_argument('--ui-dist',type=Path,default=ROOT/'web/dist')
 p.add_argument('--output',type=Path,default=ROOT/'dist')
 a=p.parse_args()
-a.arch=a.arch or ('x86_64' if a.profile=='dsm7' else 'geminilake')
-if a.profile=='dsm6' and a.arch=='x86_64':
-    p.error('The grouped x86_64 profile is enabled for DSM 7 only; use a specific DSM 6 platform')
 info=re.sub(r'^arch="[^"]+"',f'arch="{a.arch}"',(ROOT/f'packaging/INFO.{a.profile}').read_text(),flags=re.M)
 version=re.search(r'^version="([^"]+)"',info,re.M).group(1)
 assert re.fullmatch(r'[0-9A-Za-z.-]+',version), 'Invalid version for versioned UI paths'
@@ -58,19 +55,15 @@ with tempfile.TemporaryDirectory() as temp:
     entry=f'index-{version}.html'
     shutil.copy2(payload/'ui/index.html',payload/'ui'/entry)
     entry_url=f'/webman/3rdparty/HardwareMonitor/{entry}'
-    if a.profile=='dsm7':
-        shutil.copytree(ROOT/'packaging/desktop/dsm7',payload/'ui',dirs_exist_ok=True)
-        launcher=payload/'ui/HardwareMonitor.js'
-        source=launcher.read_text()
-        assert source.count('/webman/3rdparty/HardwareMonitor/index.html')==1
-        launcher_name=f'HardwareMonitor-{version}.js'
-        (payload/'ui'/launcher_name).write_text(source.replace('/webman/3rdparty/HardwareMonitor/index.html',entry_url))
-        launcher.unlink()
-        config=json.loads((payload/'ui/config').read_text())
-        config[launcher_name]=config.pop('HardwareMonitor.js')
-    else:
-        config=json.loads((payload/'ui/config').read_text())
-        config['.url']['org.hardwaremonitor.app']['url']=entry_url
+    shutil.copytree(ROOT/'packaging/desktop/dsm7',payload/'ui',dirs_exist_ok=True)
+    launcher=payload/'ui/HardwareMonitor.js'
+    source=launcher.read_text()
+    assert source.count('/webman/3rdparty/HardwareMonitor/index.html')==1
+    launcher_name=f'HardwareMonitor-{version}.js'
+    (payload/'ui'/launcher_name).write_text(source.replace('/webman/3rdparty/HardwareMonitor/index.html',entry_url))
+    launcher.unlink()
+    config=json.loads((payload/'ui/config').read_text())
+    config[launcher_name]=config.pop('HardwareMonitor.js')
     (payload/'ui/config').write_text(json.dumps(config,ensure_ascii=False,indent=2)+'\n')
     # Regular entrypoint: avoids relying on CGI symlink handling; 0004 showed
     # this alone does not resolve DSM's HTML 403 response.
@@ -91,7 +84,7 @@ with tempfile.TemporaryDirectory() as temp:
         (outer/'scripts'/name).write_text('#!/bin/sh\nexit 0\n')
     for script in (outer/'scripts').iterdir():script.chmod(0o755)
     shutil.copy2(ROOT/'LICENSE',outer/'LICENSE')
-    shutil.copy2(ROOT/f"packaging/ui/images/icon_{64 if a.profile=='dsm7' else 72}.png",outer/'PACKAGE_ICON.PNG')
+    shutil.copy2(ROOT/'packaging/ui/images/icon_64.png',outer/'PACKAGE_ICON.PNG')
     shutil.copy2(ROOT/'packaging/ui/images/icon_256.png',outer/'PACKAGE_ICON_256.PNG')
     with (outer/'package.tgz').open('wb') as raw:
         with gzip.GzipFile(fileobj=raw,mode='wb',mtime=0) as zipped:

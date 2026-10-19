@@ -22,11 +22,11 @@ class PublishTests(unittest.TestCase):
             if name.endswith('.spk'):
                 (self.root/name).write_bytes(b'synthetic package')
                 packages[name] = hashlib.sha256(b'synthetic package').hexdigest()
-        (self.root/'build-manifest.json').write_text(json.dumps({'commit': SHA, 'version': '0.8.0-0018', 'packages': packages}))
+        (self.root/'build-manifest.json').write_text(json.dumps({'commit': SHA, 'version': '0.8.0-0026', 'packages': packages}))
         self.sums()
         self.calls = []
         self.head = SHA
-        self.release = {'immutable': False, 'assets': [{'name': 'HardwareMonitor-0.8.0-0017-v1000-dsm7-development.spk'}, {'name': 'HardwareMonitorNotifyProbe.spk'}, {'name': 'user-notes.txt'}]}
+        self.release = {'immutable': False, 'assets': [{'name': 'HardwareMonitor-0.8.0-0017-v1000-dsm7-development.spk'}, {'name': 'HardwareMonitor-dsm6-geminilake.spk'}, {'name': 'HardwareMonitor-0.8.0-0025-geminilake-dsm6-development.spk'}, {'name': 'HardwareMonitorNotifyProbe.spk'}, {'name': 'user-notes.txt'}]}
         self.tag = {'object': {'sha': '2'*40}}
 
     def sums(self):
@@ -53,7 +53,7 @@ class PublishTests(unittest.TestCase):
         upload = next(args for args, _ in self.calls if args[:2] == ('release', 'upload'))
         self.assertIn('--clobber', upload)
         deleted = [args[3] for args, _ in self.calls if args[:2] == ('release', 'delete-asset')]
-        self.assertEqual(deleted, ['HardwareMonitor-0.8.0-0017-v1000-dsm7-development.spk'])
+        self.assertEqual(set(deleted), {'HardwareMonitor-0.8.0-0017-v1000-dsm7-development.spk', 'HardwareMonitor-dsm6-geminilake.spk', 'HardwareMonitor-0.8.0-0025-geminilake-dsm6-development.spk'})
 
     def test_first_release_creates_tag_and_attaches_all_assets(self):
         self.release = self.tag = None
@@ -61,7 +61,7 @@ class PublishTests(unittest.TestCase):
         create = next(args for args, _ in self.calls if args[:2] == ('release', 'create'))
         self.assertIn('--verify-tag', create)
         self.assertIn('--prerelease', create)
-        self.assertEqual(sum(str(self.root/name) in create for name in module.NAMES), 4)
+        self.assertEqual(sum(str(self.root/name) in create for name in module.NAMES), 3)
 
     def test_superseded_build_has_no_writes(self):
         self.head = '2'*40
@@ -96,3 +96,9 @@ class PublishTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'simulated'):
             module.publish(self.root, 'owner/repo', SHA, 'main', fail)
         self.assertFalse(any(args[:2] == ('release', 'delete-asset') for args, _ in self.calls))
+
+    def test_retired_package_in_new_asset_set_is_rejected_before_network(self):
+        (self.root/'HardwareMonitor-dsm6-geminilake.spk').write_bytes(b'retired package')
+        with self.assertRaisesRegex(ValueError, 'three checked DSM 7'):
+            self.publish()
+        self.assertFalse(self.calls)

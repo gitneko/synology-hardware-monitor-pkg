@@ -20,7 +20,7 @@ On RS2421RP+ / DSM 7.4.1-90080, the user confirms installation, the internal win
 1. **Hardware matrix:** live iLO 5 3.22 without Advanced, iDRAC7 and additional controller generations; storage/controller/drive faults, sensors and firmware/permission differences. A real multi-fault and iLO test has been proposed for the following week but has not occurred yet.
 2. **NAS language acceptance:** Automatic detection, explicit English/German, error paths, English CSV, SMTP preview/test and the saved desktop language. Confirm an old build-0016 backup can be restored after upgrading.
 3. **SNMP:** SNMPv3 polling and traps, HPE/Dell profiles/OIDs, secure device association and cross-protocol deduplication. Not implemented.
-4. **DSM permissions/platforms:** full native Application Privileges enforcement and viewer menu access, DSM 6.2.4 on DS220+, upgrade/rollback and directory-service behavior.
+4. **DSM permissions/platforms:** full native Application Privileges enforcement and viewer menu access, DSM 7 upgrade/rollback and directory-service behavior.
 5. **Long-running operation:** slow discovery versus fast polling, backoff/jitter, per-log-service baselines and rollover handling, bounded fingerprints, log rotation/crash restart, disk-full behavior, resource measurements and longer outage/recovery tests.
 6. **Release preparation:** reviewed supported-platform matrix, dependency/tool provenance, repeatable release pipeline, supply-chain/security review and appropriate signing/distribution.
 

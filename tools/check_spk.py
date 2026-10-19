@@ -3,7 +3,8 @@
 import argparse,hashlib,io,json,os,re,shlex,subprocess,tarfile,tempfile,urllib.parse
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('spk',type=Path);a=p.parse_args()
-profile='dsm6' if '-dsm6-' in a.spk.name else 'dsm7'
+profile='dsm7'
+assert '-dsm7-' in a.spk.name, 'Only DSM 7 packages are supported'
 architecture=next((arch for arch in ['x86_64','v1000','geminilake'] if f'-{arch}-' in a.spk.name),None)
 assert architecture, 'Expected an explicit supported architecture in the SPK filename'
 with tarfile.open(a.spk) as outer:
@@ -19,8 +20,9 @@ with tarfile.open(a.spk) as outer:
     assert b'service start' in lifecycle and b'--notify-dsm' not in lifecycle and b'synosystemctl' not in lifecycle
     import struct
     width,height=struct.unpack('>II',outer.extractfile('PACKAGE_ICON.PNG').read()[16:24])
-    assert (width,height)==((64,64) if profile=='dsm7' else (72,72))
+    assert (width,height)==(64,64)
     info=outer.extractfile('INFO').read().decode(); full_version=re.search(r'^version="([^"]+)"',info,re.M).group(1);version=full_version.split('-')[0];assert f'arch="{architecture}"' in info;assert 'displayname="Hardware Monitor"' in info
+    assert 'os_min_ver="7.0-40761"' in info, 'Expected DSM 7 minimum version'
     for member in outer.getmembers():
         if member.name.startswith('scripts/') and member.isfile():
             assert member.mode&0o111
@@ -32,17 +34,16 @@ with tarfile.open(a.spk) as outer:
         assert payload.extractfile('ui/api.cgi').read()==payload.extractfile('bin/hardware-monitor').read()
         assert 'ui/index.html' in members and 'THIRD_PARTY_NOTICES.txt' in members
         config=json.load(payload.extractfile('ui/config'))
-        if profile=='dsm7':
-            class_name='SYNO.SDS.App.HardwareMonitor.Instance'
-            launcher_name=f'HardwareMonitor-{full_version}.js'
-            app=config[launcher_name][class_name]
-            assert app['type']=='app' and app['appWindow']==class_name
-            assert f'dsmappname="{class_name}"' in info
-            launcher=payload.extractfile('ui/'+launcher_name).read().decode()
-            assert 'window.open(' not in launcher and 'v-app-instance' in launcher and 'v-app-window' in launcher
-            # Verify the actual launcher code with DSM globals stubbed. This does not
-            # validate DSM's component implementation, only our own registration/render.
-            program="""const vm=require('node:vm'),assert=require('node:assert/strict');
+        class_name='SYNO.SDS.App.HardwareMonitor.Instance'
+        launcher_name=f'HardwareMonitor-{full_version}.js'
+        app=config[launcher_name][class_name]
+        assert app['type']=='app' and app['appWindow']==class_name
+        assert f'dsmappname="{class_name}"' in info
+        launcher=payload.extractfile('ui/'+launcher_name).read().decode()
+        assert 'window.open(' not in launcher and 'v-app-instance' in launcher and 'v-app-window' in launcher
+        # Verify the actual launcher code with DSM globals stubbed. This does not
+        # validate DSM's component implementation, only our own registration/render.
+        program="""const vm=require('node:vm'),assert=require('node:assert/strict');
 const source=JSON.parse(process.argv[1]);
 const context={SYNO:{SDS:{App:{HardwareMonitor:{}}},namespace(){}},Vue:{extend:x=>x}};
 vm.createContext(context);vm.runInContext(source,context);
@@ -52,12 +53,7 @@ assert.equal(tree.options.props.className,'SYNO.SDS.App.HardwareMonitor.Instance
 assert.equal(tree.children[0].name,'v-app-window');
 assert.equal(tree.children[0].children[0].name,'iframe');
 process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
-            app_url=subprocess.check_output(['node','-e',program,json.dumps(launcher)],text=True)
-        else:
-            app=config['.url']['org.hardwaremonitor.app']
-            assert app['type']=='legacy' and app['appWindow']=='org.hardwaremonitor.app'
-            assert 'ui/HardwareMonitor.js' not in members
-            app_url=app['url']
+        app_url=subprocess.check_output(['node','-e',program,json.dumps(launcher)],text=True)
         canonical='/webman/3rdparty/HardwareMonitor/'
         resolved=urllib.parse.urljoin('https://nas.example.invalid:5001/',app_url)
         assert urllib.parse.urlsplit(resolved).path.startswith(canonical), 'Desktop link misses the DSM /webman/ prefix'

@@ -6,7 +6,7 @@ Current implementation: 0.8.0-0020.
 
 One statically linked Rust/Tokio executable provides the daemon, compiled CGI bridge, local maintenance commands and service lifecycle. DSM lifecycle hooks are the small scripts required by the package format. Polling runs in the daemon, without Task Scheduler or loose monitoring scripts. Up to four devices are polled concurrently using read-only Redfish HTTPS GET requests. There is no public daemon TCP API and no SMTP server.
 
-The Vue 3 application is served through DSM's package web alias. On DSM 7, a Vue 2 host launcher opens a DSM desktop window containing a same-origin iframe. DSM 6 has a separate legacy launcher profile and remains unverified on the target hardware. Versioned HTML/launcher filenames, hashed assets and positive release timestamps prevent the previously observed stale entrypoint problem.
+The Vue 3 application is served through DSM's package web alias. A Vue 2 host launcher opens a DSM 7 desktop window containing a same-origin iframe. Versioned HTML/launcher filenames, hashed assets and positive release timestamps prevent the previously observed stale entrypoint problem.
 
 The CGI bridge forwards requests to a Unix socket. The service authenticates the DSM session through the fixed native `authenticate.cgi` helper, resolves actual groups and assigns administrator or viewer access. Administrators can administer the app; members of `hardware-monitor-viewers` receive read-only data. Every administrative operation also requires HTTPS, a matching Origin, the DSM token and a short-lived package CSRF proof bound to the verified user/session. The complete DSM Application Privileges contract and viewer menu integration are still pending. A desktop icon is not an authorization check.
 

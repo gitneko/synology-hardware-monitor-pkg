@@ -10,8 +10,10 @@ import subprocess
 import tempfile
 from urllib.parse import quote
 
-NAMES = {'HardwareMonitor-dsm7-x86_64.spk', 'HardwareMonitor-dsm6-geminilake.spk',
+NAMES = {'HardwareMonitor-dsm7-x86_64.spk',
          'SHA256SUMS', 'build-manifest.json'}
+# Retired managed assets are cleaned up only after a successful replacement upload.
+RETIRED_ASSETS = {'HardwareMonitor-dsm6-geminilake.spk'}
 OLD_ASSET = r'HardwareMonitor-\d+\.\d+\.\d+-\d+-(?:v1000|geminilake|x86_64)-dsm[67]-development\.spk(?:\.sha256)?|build-manifest-\d+\.json'
 
 
@@ -31,7 +33,7 @@ def gh(*args, payload=None, missing=False):
 def publish(directory, repository, commit, branch, client=gh):
     directory = Path(directory)
     if {p.name for p in directory.iterdir()} != NAMES:
-        raise ValueError('Expected exactly the four checked release assets')
+        raise ValueError('Expected exactly the three checked DSM 7 release assets')
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Expected a full source commit SHA')
     manifest = json.loads((directory/'build-manifest.json').read_text())
@@ -63,8 +65,7 @@ def publish(directory, repository, commit, branch, client=gh):
     else:
         client('api', '--method', 'POST', f'{repo}/git/refs', payload={'ref': 'refs/tags/latest', 'sha': commit})
     notes = (f"Rolling development build **{manifest['version']}** from `{commit}`.\n\n"
-             'Unsigned SPKs. Choose the DSM major version. '
-             'DSM 7 x86_64 covers both v1000 and geminilake (and others); DSM 6 retains geminilake.\n\n'
+             'Unsigned DSM 7 x86_64 SPK for v1000, geminilake and other compatible x86_64 platforms.\n\n'
              'Verify downloads against SHA256SUMS. This mutable tag and its fixed-name assets '
              'are replaced after successful default-branch builds. Replacement is not atomic.')
     with tempfile.TemporaryDirectory() as temp:
@@ -77,7 +78,7 @@ def publish(directory, repository, commit, branch, client=gh):
                    '--notes-file', str(notes_file), '--prerelease', '--repo', repository)
             for asset in release['assets']:
                 name = asset['name']
-                if name not in NAMES and re.fullmatch(OLD_ASSET, name):
+                if name not in NAMES and (name in RETIRED_ASSETS or re.fullmatch(OLD_ASSET, name)):
                     client('release', 'delete-asset', 'latest', name, '--yes', '--repo', repository)
         else:
             client('release', 'create', 'latest', *paths, '--verify-tag', '--prerelease',

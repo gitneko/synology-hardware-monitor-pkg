@@ -1,4 +1,4 @@
-name: Check and build SPKs
+name: Check and build DSM 7 SPK
 on:
   push:
   pull_request:
@@ -46,7 +46,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl perl python3
       - name: Build pinned musl toolchain
         run: sh tools/bootstrap_musl.sh
-      - name: Build and validate both DSM packages
+      - name: Build and validate DSM 7 package
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           python3 tools/build_packages.py

@@ -1,6 +1,6 @@
 # NAS acceptance checklist and confirmed results
 
-Target: RS2421RP+ / v1000 / DSM 7.4.1-90080. The user installs packages manually. DS220+ / geminilake / DSM 6.2.4 remains a separate, unavailable target. No agent-side NAS login, package installation or hardware configuration change is implied by local checks.
+Target: RS2421RP+ / v1000 / DSM 7.4.1-90080. The user installs packages manually. No agent-side NAS login, package installation or hardware configuration change is implied by local checks.
 
 ## Confirmed by the user
 
@@ -22,4 +22,4 @@ Compare running/offline PSU, fan, temperature and storage/RAID readings with iDR
 
 Earlier R340 GET records showed PS1 Critical/UnavailableOffline with 0 W and a healthy PS2; this established the reported fault, not whether the PSU, supply or cable was the physical cause. A transient Lifecycle-log page returned HTTP 500; later direct-IP and hostname comparisons showed changing collections and successful valid final pages. Those observations did not prove a hostname problem or one permanent pagination defect. See [Live records](LIVE-TEST-R340.md).
 
-Check start/stop/restart/upgrade, logout/session expiry, denied users and viewer roles before wider deployment. Full DSM ACL enforcement, DSM 6 behavior, directory services, storage-full behavior and long-running resource use remain open. See [Roadmap](ROADMAP.md).
+Check start/stop/restart/upgrade, logout/session expiry, denied users and viewer roles before wider deployment. Full DSM ACL enforcement, directory services, storage-full behavior and long-running resource use remain open. See [Roadmap](ROADMAP.md).
