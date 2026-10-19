@@ -26,10 +26,12 @@ DSM 7 is the supported NAS platform.
 | Platform | Status |
 |---|---|
 | RS2421RP+ / v1000 / DSM 7.4.1-90080 | Prior-release installation, internal window, sign-in, device management, notification and backup/restore workflows confirmed by the user |
-| Dell R340 / iDRAC9 Enterprise | Read-only live discovery and selected fault/notification cases demonstrated |
-| Dell iDRAC7+ and HPE ProLiant Gen10 / iLO 5 3.22 without Advanced | Intended scope; firmware/resource/license coverage still requires live acceptance |
+| Dell PowerEdge R420 / iDRAC7 | Complete live polling and overall health assessment verified |
+| Dell PowerEdge R330 / iDRAC8 | Complete live polling and overall health assessment verified |
+| Dell PowerEdge R340 / iDRAC9 | Complete live polling and overall health assessment verified |
+| HPE ProLiant Gen10 / iLO 5 3.22 | Complete live polling and overall health assessment verified |
 
-The English additions from build 0017 and the grouped DSM 7 package from build 0018 need target acceptance. No universal RAID/OEM or production-reliability claim is made. **SNMP polling/traps are not implemented yet.** Full native DSM Application Privileges/viewer menu integration and operational hardening remain open. See [hardware compatibility](docs/HARDWARE-COMPATIBILITY.md), [validation](docs/VALIDATION.md) and [roadmap](docs/ROADMAP.md).
+No universal RAID/OEM or production-reliability claim is made. **SNMP polling/traps are not implemented yet.** See [hardware compatibility](docs/HARDWARE-COMPATIBILITY.md), [validation](docs/VALIDATION.md) and [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
