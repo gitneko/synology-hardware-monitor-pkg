@@ -486,6 +486,36 @@ impl Store {
         now: i64,
         revision: Option<i64>,
     ) -> Result<bool> {
+        self.record_poll_error(
+            d,
+            now,
+            revision,
+            "Management-Abfrage fehlgeschlagen (Netzwerk, TLS, Anmeldung oder Zeitlimit)",
+        )
+    }
+
+    pub fn poll_failure_revision(
+        &mut self,
+        d: &Device,
+        now: i64,
+        revision: Option<i64>,
+        error: &anyhow::Error,
+    ) -> Result<bool> {
+        self.record_poll_error(
+            d,
+            now,
+            revision,
+            &crate::collector::poll_failure_label(error),
+        )
+    }
+
+    fn record_poll_error(
+        &mut self,
+        d: &Device,
+        now: i64,
+        revision: Option<i64>,
+        label: &str,
+    ) -> Result<bool> {
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -504,9 +534,7 @@ impl Store {
             d,
             &Observation {
                 key: "collector".into(),
-                label:
-                    "Management-Abfrage fehlgeschlagen (Netzwerk, TLS, Anmeldung oder Zeitlimit)"
-                        .into(),
+                label: label.into(),
                 health: Health::Critical,
                 reading: None,
                 unit: None,
@@ -544,7 +572,7 @@ impl Store {
                 alarm["covered_by"] = json!(covered);
                 alarm["current_health"] = json!(current);
             }
-            devices.push(json!({"device":d,"revision":revision,"last_poll":last_poll,"stale":!d.enabled || last_poll.is_none_or(|p| crate::now()-p > (d.interval_seconds*2) as i64),"snapshot":parsed,"alarms":alarms}));
+            devices.push(json!({"device":d,"revision":revision,"last_poll":last_poll,"poll_timeout_seconds":d.poll_timeout_seconds(),"stale":!d.enabled || last_poll.is_none_or(|p| crate::now()-p > d.stale_after_seconds() as i64),"snapshot":parsed,"alarms":alarms}));
         }
         let events = self.event_entries(100)?;
         Ok(
@@ -843,7 +871,7 @@ fn event(
         })
         .transpose()?
         .unwrap_or_default();
-    let selected = policy.selection.accepts(kind, health);
+    let selected = policy.selection.accepts(key, kind, health);
     let gate = if !d.alerts_enabled {
         Some("device_disabled")
     } else if !d.enabled {
@@ -1002,6 +1030,8 @@ mod tests {
             alerts_enabled: true,
             ca_file: None,
             ca_pem: None,
+            tls_profile: Default::default(),
+            pinned_certificate_pem: None,
             enabled: true,
         }
     }
@@ -1018,12 +1048,45 @@ mod tests {
         }
     }
     #[test]
+    fn older_idrac_scan_budget_is_reflected_in_freshness_and_dashboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let mut d = device();
+        d.tls_profile = crate::model::TlsProfile::Idrac7;
+        d.pinned_certificate_pem = Some(crate::legacy_tls::tests::pem());
+        store.put(&d, b"synthetic-ciphertext").unwrap();
+        store
+            .apply(&d, &snap(Health::Ok), crate::now() - 180)
+            .unwrap();
+        let dashboard = store.dashboard().unwrap();
+        assert_eq!(dashboard["devices"][0]["poll_timeout_seconds"], 300);
+        assert_eq!(dashboard["devices"][0]["stale"], false);
+        store
+            .apply(&d, &snap(Health::Ok), crate::now() - 430)
+            .unwrap();
+        assert_eq!(store.dashboard().unwrap()["devices"][0]["stale"], true);
+        d.tls_profile = crate::model::TlsProfile::Standard;
+        d.pinned_certificate_pem = None;
+        store.put(&d, b"synthetic-ciphertext").unwrap();
+        store
+            .apply(&d, &snap(Health::Ok), crate::now() - 180)
+            .unwrap();
+        let dashboard = store.dashboard().unwrap();
+        assert_eq!(dashboard["devices"][0]["poll_timeout_seconds"], 90);
+        assert_eq!(dashboard["devices"][0]["stale"], true);
+    }
+    #[test]
     fn additive_upgrade_keeps_legacy_configuration_and_secret() {
         let dir = tempfile::tempdir().unwrap();
         let d = device();
         let mut config = serde_json::to_value(&d).unwrap();
         config.as_object_mut().unwrap().remove("enabled");
         config.as_object_mut().unwrap().remove("ca_pem");
+        config.as_object_mut().unwrap().remove("tls_profile");
+        config
+            .as_object_mut()
+            .unwrap()
+            .remove("pinned_certificate_pem");
         let old = Connection::open(dir.path().join("monitor.db")).unwrap();
         old.execute_batch("CREATE TABLE devices(id TEXT PRIMARY KEY,config TEXT NOT NULL,secret BLOB NOT NULL,last_poll INTEGER,snapshot TEXT,logs_initialized INTEGER NOT NULL DEFAULT 0); CREATE TABLE outbox(id INTEGER PRIMARY KEY,event_id INTEGER NOT NULL UNIQUE,delivered INTEGER,attempts INTEGER NOT NULL DEFAULT 0,next_try INTEGER NOT NULL DEFAULT 0);").unwrap();
         old.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,device TEXT NOT NULL,key TEXT NOT NULL,kind TEXT NOT NULL,health TEXT NOT NULL,message TEXT NOT NULL,created INTEGER NOT NULL);").unwrap();
@@ -1037,6 +1100,8 @@ mod tests {
         let mut store = Store::open(dir.path()).unwrap();
         let (migrated, secret, revision) = store.get(&d.id).unwrap().unwrap();
         assert!(migrated.enabled && migrated.ca_pem.is_none());
+        assert_eq!(migrated.tls_profile, crate::model::TlsProfile::Standard);
+        assert!(migrated.pinned_certificate_pem.is_none());
         assert_eq!(secret, b"unchanged-ciphertext");
         assert_eq!(revision, 0);
         assert_eq!(store.dashboard().unwrap()["devices"][0]["last_poll"], 123);
@@ -1235,7 +1300,17 @@ mod tests {
         assert_eq!(s.pending(100).unwrap().len(), 0);
         s.apply(&d, &snap(Health::Critical), 101).unwrap();
         s.apply(&d, &snap(Health::Critical), 102).unwrap();
-        s.apply(&d, &snap(Health::Unknown), 401).unwrap();
+        let mut disabled = snap(Health::Unknown);
+        disabled
+            .assessment_exclusions
+            .insert("fan".into(), crate::model::AssessmentExclusion::Disabled);
+        s.apply(&d, &disabled, 401).unwrap();
+        let data = s.dashboard().unwrap();
+        assert_eq!(
+            data["devices"][0]["snapshot"]["assessment_exclusions"]["fan"],
+            "disabled"
+        );
+        assert_eq!(data["devices"][0]["alarms"][0]["health"], "critical");
         s.apply(&d, &Snapshot::default(), 402).unwrap();
         assert_eq!(s.pending(402).unwrap().len(), 1);
         drop(s);
@@ -1774,16 +1849,108 @@ mod tests {
             warning: false,
             ..Default::default()
         };
-        assert!(!selection.accepts("alarm", Health::Warning));
-        assert!(selection.accepts("alarm", Health::Critical));
-        assert!(!selection.accepts("hardware_log", Health::Warning));
+        assert!(!selection.accepts("fan", "alarm", Health::Warning));
+        assert!(selection.accepts("fan", "alarm", Health::Critical));
+        assert!(!selection.accepts("log", "hardware_log", Health::Warning));
         selection.hardware_log = false;
-        assert!(!selection.accepts("hardware_log", Health::Critical));
+        assert!(!selection.accepts("log", "hardware_log", Health::Critical));
         selection.repeat = false;
-        assert!(!selection.accepts("repeat", Health::Critical));
-        assert!(selection.accepts("recovery", Health::Ok));
+        assert!(!selection.accepts("fan", "repeat", Health::Critical));
+        assert!(selection.accepts("fan", "recovery", Health::Ok));
         selection.recovery = false;
-        assert!(!selection.accepts("recovery", Health::Ok));
+        assert!(!selection.accepts("fan", "recovery", Health::Ok));
+    }
+    #[test]
+    fn query_filter_controls_both_channels_and_keeps_filtered_events_in_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let d = device();
+        store.put(&d, b"encrypted").unwrap();
+        store
+            .save_mail(
+                &crate::mail::Settings {
+                    enabled: true,
+                    host: "smtp.example.invalid".into(),
+                    from_address: "sender@example.invalid".into(),
+                    recipients: vec!["recipient@example.invalid".into()],
+                    ..Default::default()
+                },
+                b"",
+                0,
+                "admin",
+            )
+            .unwrap();
+        let mut policy = crate::notification::Input {
+            language: Default::default(),
+            revision: 0,
+            desktop_enabled: true,
+            selection: crate::notification::Selection {
+                critical: false,
+                warning: false,
+                monitoring: Some(true),
+                ..Default::default()
+            },
+        };
+        store.save_notifications(&policy, "verified-admin").unwrap();
+        let sample = |key: &str, health: Health| {
+            let mut snapshot = snap(health);
+            snapshot.observations[0].key = key.into();
+            snapshot
+        };
+        store
+            .apply(
+                &d,
+                &sample("coverage:/redfish/v1/Systems", Health::Warning),
+                100,
+            )
+            .unwrap();
+        assert!(store.pending_mail(100).unwrap().is_some());
+        assert!(store.pending_desktop(100).unwrap().is_some());
+        assert_eq!(
+            store.dashboard().unwrap()["events"][0]["mail_reason"],
+            "queued"
+        );
+        // Saving the explicit exclusion cancels earlier jobs on both channels.
+        policy.revision = 1;
+        policy.selection.monitoring = Some(false);
+        policy.selection.critical = true;
+        policy.selection.warning = true;
+        store.save_notifications(&policy, "verified-admin").unwrap();
+        store
+            .apply(&d, &sample("collector", Health::Critical), 101)
+            .unwrap();
+        store
+            .apply(&d, &sample("collector", Health::Ok), 102)
+            .unwrap();
+        assert!(store.pending_mail(102).unwrap().is_none());
+        assert!(store.pending_desktop(102).unwrap().is_none());
+        let data = store.dashboard().unwrap();
+        let query_events: Vec<_> = data["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["key"] == "collector")
+            .collect();
+        assert_eq!(query_events.len(), 2);
+        assert!(query_events
+            .iter()
+            .all(|e| e["mail_reason"] == "filtered" && e["desktop_reason"] == "filtered"));
+        drop(store);
+        let mut store = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            store
+                .notification_settings()
+                .unwrap()
+                .0
+                .selection
+                .monitoring,
+            Some(false)
+        );
+        store
+            .apply(&d, &sample("fan", Health::Warning), 103)
+            .unwrap();
+        assert!(store.pending_mail(103).unwrap().is_some());
+        assert!(store.pending_desktop(103).unwrap().is_some());
     }
     #[test]
     fn terminal_mail_retention_cascades_but_keeps_pending_recipients() {

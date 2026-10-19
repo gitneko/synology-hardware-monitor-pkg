@@ -494,6 +494,8 @@ mod tests {
             alerts_enabled: true,
             ca_file: None,
             ca_pem: None,
+            tls_profile: Default::default(),
+            pinned_certificate_pem: None,
             enabled: true,
         }
     }
@@ -504,7 +506,9 @@ mod tests {
         let v1 = Vault::open(&source.path().join("master.key")).unwrap();
         let v2 = Vault::open(&target.path().join("master.key")).unwrap();
         let mut s = Store::open(source.path()).unwrap();
-        let d = device();
+        let mut d = device();
+        d.tls_profile = crate::model::TlsProfile::Idrac7;
+        d.pinned_certificate_pem = Some(crate::legacy_tls::tests::pem());
         s.put(&d, &v1.seal(&d.id, b"device-secret-marker").unwrap())
             .unwrap();
         let settings = crate::mail::Settings {
@@ -597,6 +601,8 @@ mod tests {
             .unwrap();
         let (restored, secret, revision) = t.get(&d.id).unwrap().unwrap();
         assert!(!restored.enabled);
+        assert_eq!(restored.tls_profile, d.tls_profile);
+        assert_eq!(restored.pinned_certificate_pem, d.pinned_certificate_pem);
         assert!(revision > old.2);
         assert_eq!(
             &*v2.unseal(&d.id, &secret).unwrap(),

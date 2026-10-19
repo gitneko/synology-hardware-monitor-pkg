@@ -42,6 +42,8 @@ pub struct HardwareLog {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
+    pub assessment_exclusions: std::collections::BTreeMap<String, AssessmentExclusion>,
+    #[serde(default)]
     pub resource_aliases: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub resources: std::collections::BTreeMap<String, crate::correlation::Resource>,
@@ -51,6 +53,22 @@ pub struct Snapshot {
     pub capabilities: Vec<Capability>,
     pub logs: Vec<HardwareLog>,
     pub logs_complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssessmentExclusion {
+    Disabled,
+    EmptyController,
+    Informational,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsProfile {
+    #[default]
+    Standard,
+    Idrac7,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,6 +83,10 @@ pub struct Device {
     pub ca_file: Option<String>,
     #[serde(default)]
     pub ca_pem: Option<String>,
+    #[serde(default)]
+    pub tls_profile: TlsProfile,
+    #[serde(default)]
+    pub pinned_certificate_pem: Option<String>,
     #[serde(default = "enabled_default")]
     pub enabled: bool,
 }
@@ -74,6 +96,22 @@ fn enabled_default() -> bool {
 }
 
 impl Device {
+    pub fn poll_timeout_seconds(&self) -> u64 {
+        match self.tls_profile {
+            TlsProfile::Idrac7 => 300,
+            TlsProfile::Standard => 90,
+        }
+    }
+
+    pub fn stale_after_seconds(&self) -> u64 {
+        self.interval_seconds * 2
+            + if self.tls_profile == TlsProfile::Idrac7 {
+                self.poll_timeout_seconds()
+            } else {
+                0
+            }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.id.is_empty()
@@ -121,6 +159,22 @@ impl Device {
         );
         if let Some(pem) = &self.ca_pem {
             validate_certificates(pem)?;
+        }
+        match self.tls_profile {
+            TlsProfile::Standard => anyhow::ensure!(
+                self.pinned_certificate_pem.is_none(),
+                "standard TLS requires CA/hostname validation"
+            ),
+            TlsProfile::Idrac7 => {
+                anyhow::ensure!(
+                    self.ca_file.is_none() && self.ca_pem.is_none(),
+                    "pinning cannot grant CA trust"
+                );
+                let pem = self.pinned_certificate_pem.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("server certificate required for iDRAC7 mode")
+                })?;
+                crate::legacy_tls::certificate(pem)?;
+            }
         }
         Ok(())
     }

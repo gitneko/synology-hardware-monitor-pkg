@@ -13,6 +13,7 @@ npm ci --prefix web --ignore-scripts
 npm run build --prefix web
 node --test --test-isolation=none web/tests/*.test.mjs
 python tools/integration_test.py target/debug/hardware-monitor
+python tools/legacy_tls_integration_test.py target/debug/hardware-monitor
 python tools/smtp_integration_test.py target/debug/hardware-monitor
 ```
 
@@ -45,11 +46,11 @@ Normal service startup already processes saved SMTP/desktop channel settings. Th
 
 ## Build both supported SPKs
 
-On an x86_64 Linux development machine (Ubuntu 24.04 is used by CI), install Rust 1.98.1 via rustup and Node 26 with npm. The toolchain also needs a C compiler, make, binutils, curl, Python 3 and OpenSSL:
+On an x86_64 Linux development machine (Ubuntu 24.04 is used by CI), install Rust 1.98.1 via rustup and Node 26 with npm. The toolchain also needs a C compiler, make, binutils, curl, Perl, Python 3 and OpenSSL:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential binutils curl python3 openssl
+sudo apt-get install -y build-essential binutils curl perl python3 openssl
 rustup toolchain install 1.98.1 --component rustfmt --component clippy
 rustup override set 1.98.1
 rustup target add x86_64-unknown-linux-musl
@@ -57,12 +58,14 @@ sh tools/bootstrap_musl.sh
 python3 tools/build_packages.py
 ```
 
+OpenSSL is built from the Cargo.lock-pinned vendored source and linked statically; Perl is required for its build. The legacy TLS integration suite includes DHE-only TLS 1.2, exact certificate pinning and rejection before HTTP authentication.
+
 The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds it inside `.build/`. The package command builds the Rust executable with an explicit generic x86-64 CPU baseline, installs locked frontend dependencies, builds Vue, regenerates dependency license notices, runs the real static binary against synthetic HTTPS/SMTP servers and checks both finished SPKs. It fails on any failed stage. No NAS, device or real recipient is contacted. It rewrites the generated `THIRD_PARTY_NOTICES.txt`; review that diff when dependencies change.
 
 Output in `dist/current/`:
 
-- `HardwareMonitor-0.8.0-0018-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
-- `HardwareMonitor-0.8.0-0018-geminilake-dsm6-development.spk`: separate DSM 6.2 package.
+- `HardwareMonitor-0.8.0-0020-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
+- `HardwareMonitor-0.8.0-0020-geminilake-dsm6-development.spk`: separate DSM 6.2 package.
 - `latest-assets/`: fixed-name copies `HardwareMonitor-dsm7-x86_64.spk`, `HardwareMonitor-dsm6-geminilake.spk`, `build-manifest.json` and `SHA256SUMS`, ready for release upload.
 
 The JSON manifest records the source commit (when available), package hashes, version and archive timestamp. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
@@ -71,7 +74,7 @@ The supported release set contains these **two** SPKs. `tools/build_spk.py` stil
 
 ```sh
 python3 tools/build_spk.py --profile dsm7 --arch x86_64 --binary target/x86_64-unknown-linux-musl/release/hardware-monitor
-python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0018-x86_64-dsm7-development.spk
+python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0020-x86_64-dsm7-development.spk
 ```
 
 Do not package a binary dynamically linked against the development host's glibc. The assembler rejects dynamic/wrong-CPU executables. Never enable `target-cpu=native` or platform-specific CPU flags for this shared package. The musl compiler and bundled C code use the same baseline. Runtime CPU detection in dependencies is distinct from requiring a newer CPU at startup. See [Architecture family decision](PACKAGE-ARCHITECTURES.md).

@@ -48,6 +48,17 @@ pub fn label(value: &str, language: Language) -> String {
     if value == "Management-Abfrage erfolgreich" {
         return "Management query successful".into();
     }
+    if value == "Management-Abfrage unvollständig" {
+        return "Management query incomplete".into();
+    }
+    if let Some(detail) = value.strip_prefix("Management-Abfrage fehlgeschlagen · ") {
+        return format!("Management query failed · {}", label(detail, language));
+    }
+    if value.starts_with("/redfish/") || value.starts_with("Redfish-Verweis:") {
+        if let Some((uri, detail)) = value.rsplit_once(": ") {
+            return format!("{uri}: {}", text(detail, language));
+        }
+    }
     if value == "Management-Abfrage fehlgeschlagen (Netzwerk, TLS, Anmeldung oder Zeitlimit)" {
         return "Management query failed (network, TLS, sign-in or timeout)".into();
     }
@@ -108,7 +119,8 @@ pub fn event_message(
         }
     } else if key.starts_with("coverage:") {
         let body = if language == Language::En {
-            raw.replace("erfolgreich nach Wiederholung", "successful after retry")
+            label(raw, language)
+                .replace("erfolgreich nach Wiederholung", "successful after retry")
                 .replace("erfolgreich", "successful")
                 .replace(" nach Wiederholung", " after retry")
                 .replace("Netzwerk- oder TLS-Fehler", "Network or TLS error")
@@ -206,7 +218,12 @@ pub fn dashboard(data: &mut Value, language: Language) {
                     }
                 }
             }
-            if let Some(rows) = device["snapshot"]["observations"].as_array_mut() {
+            // Mutable indexing would turn a null snapshot into an object.
+            if let Some(rows) = device
+                .get_mut("snapshot")
+                .and_then(|snapshot| snapshot.get_mut("observations"))
+                .and_then(Value::as_array_mut)
+            {
                 for row in rows {
                     row["label"] = json!(label(row["label"].as_str().unwrap_or(""), language));
                 }
@@ -237,6 +254,54 @@ pub fn outcome(value: &str, language: Language) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dashboard_preserves_missing_measurements_in_both_languages() {
+        for language in [Language::De, Language::En] {
+            let mut data = json!({
+                "events": [],
+                "devices": [
+                    {"alarms": [], "snapshot": null},
+                    {"alarms": []},
+                    {"alarms": [], "snapshot": {"capabilities": []}}
+                ]
+            });
+            let original = data.clone();
+            dashboard(&mut data, language);
+            assert_eq!(data, original);
+        }
+    }
+
+    #[test]
+    fn dashboard_localizes_existing_measurements_alongside_a_new_device() {
+        let mut data = json!({
+            "events": [],
+            "devices": [
+                {"alarms": [], "snapshot": null},
+                {
+                    "alarms": [{"label": "System – Gesamtgesundheit", "health": "critical"}],
+                    "snapshot": {
+                        "observations": [{"key": "system", "label": "System – Gesamtgesundheit", "health": "ok"}],
+                        "capabilities": []
+                    }
+                }
+            ]
+        });
+        dashboard(&mut data, Language::En);
+        assert!(data["devices"][0]["snapshot"].is_null());
+        assert_eq!(
+            data["devices"][1]["alarms"][0]["label"],
+            "System – Overall health"
+        );
+        assert_eq!(
+            data["devices"][1]["snapshot"]["observations"][0]["label"],
+            "System – Overall health"
+        );
+        assert_eq!(
+            data["devices"][1]["snapshot"]["observations"][0]["health"],
+            "ok"
+        );
+    }
+
     #[test]
     fn application_text_is_localized_but_legacy_and_vendor_messages_survive() {
         let context = json!({"version":1,"label":"System – Gesamtgesundheit (Betrieb: ausgeschaltet)","retained":false});

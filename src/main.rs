@@ -204,7 +204,7 @@ async fn poll(store: &mut Store, vault: &Vault, d: &Device, encrypted: &[u8]) ->
     match collect(vault, d, encrypted).await {
         Ok(snapshot) => store.apply(d, &snapshot, now()),
         Err(e) => {
-            store.poll_error(d, now())?;
+            store.poll_failure_revision(d, now(), None, &e)?;
             Err(e)
         }
     }
@@ -268,7 +268,7 @@ async fn serve(
                     jobs.spawn(async move {
                         let snapshot=collect(&vault,&device,&secret).await;
                         let mut s=store.lock().unwrap();
-                        let applied=match snapshot {Ok(snapshot)=>s.apply_revision(&device,&snapshot,now(),Some(revision)),Err(_)=>{eprintln!("device {}: poll failed; details excluded from logs",device.id);s.poll_error_revision(&device,now(),Some(revision))}};
+                        let applied=match snapshot {Ok(snapshot)=>s.apply_revision(&device,&snapshot,now(),Some(revision)),Err(error)=>{eprintln!("device {}: {}",device.id,hardware_monitor::collector::poll_failure_label(&error));s.poll_failure_revision(&device,now(),Some(revision),&error)}};
                         if applied.is_err() {eprintln!("device {}: database update failed",device.id);}
                         (device.id,revision,device.interval_seconds)
                     });

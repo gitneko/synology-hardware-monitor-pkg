@@ -24,6 +24,13 @@ test('HTTP diagnostics show actual status and retries; old snapshots remain read
  assert.equal(sourceTimestamp('invalid'),'');assert.equal(sourceTimestamp(null),'');assert.ok(sourceTimestamp('2026-10-17T12:00:00Z'));
 });
 
+test('incomplete polls distinguish deadlines, invalid replies and quantity limits',()=>{
+ assert.match(capabilityText({outcome:'deadline'}),/vollständigen Abfrage/);
+ assert.match(capabilityText({outcome:'invalid_response'}),/Ungültige Redfish/);
+ assert.match(capabilityText({outcome:'resource_limit'}),/Ressourcenlimit/);
+ assert.match(capabilityText({outcome:'item_limit'}),/Hardwareloglimit/);
+});
+
 test('only positively correlated identical transitions from different sources group; original history survives',()=>{
  const modern={id:2,device:'a',key:'modern',canonical_key:'modern',created:100,kind:'alarm',health:'critical',message:'PS1'};
  const legacy={...modern,id:1,key:'legacy'};

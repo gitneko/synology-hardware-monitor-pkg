@@ -46,6 +46,7 @@ def main():
     target_dir = Path(env.get('CARGO_TARGET_DIR', ROOT/'target')).resolve()
     binary = target_dir/TARGET/'release/hardware-monitor'
     run('python3', 'tools/integration_test.py', str(binary))
+    run('python3', 'tools/legacy_tls_integration_test.py', str(binary))
     run('python3', 'tools/smtp_integration_test.py', str(binary))
     version = re.search(r'^version="([^"]+)"', (ROOT/'packaging/INFO.dsm7').read_text(), re.M)[1]
     assert f'version="{version}"' in (ROOT/'packaging/INFO.dsm6').read_text()
@@ -70,7 +71,7 @@ def main():
                 'status': 'unsigned development build; NAS acceptance required',
                 'target': TARGET, 'cpu': 'x86-64 baseline (no native tuning)', 'musl': '1.2.5',
                 'packages': checksums, 'checks': ['static ELF', 'Redfish/TLS/CGI integration',
-                    'SMTP/TLS/queue integration', 'both SPK profiles, lifecycle and UI assets']}
+                    'pinned iDRAC7 TLS integration', 'SMTP/TLS/queue integration', 'both SPK profiles, lifecycle and UI assets']}
     (assets/'build-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     sums = {**checksums, 'build-manifest.json': hashlib.sha256((assets/'build-manifest.json').read_bytes()).hexdigest()}
     (assets/'SHA256SUMS').write_text(''.join(f'{digest}  {name}\n' for name, digest in sorted(sums.items())))

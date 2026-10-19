@@ -49,6 +49,8 @@ export function sourceTimestamp(value) {
 export function capabilityText(c) {
   if(c.outcome==='available')return c.attempts>1?t("Erfolgreich nach Wiederholung"):t("Erfolgreich");
   if(c.http_status)return `HTTP ${c.http_status}${c.attempts>1?t(" · {0} Versuche",c.attempts):''}`;
+  const failure={deadline:"Zeitlimit der vollständigen Abfrage erreicht",resource_limit:"Ressourcenlimit der Abfrage erreicht",byte_limit:"Datenmengenlimit der Abfrage erreicht",item_limit:"Messwert- oder Hardwareloglimit erreicht",response_limit:"Antwort überschreitet das Größenlimit",invalid_response:"Ungültige Redfish-Antwort",certificate_error:"Serverzertifikat stimmt nicht überein oder ist zeitlich ungültig",timeout:"Zeitlimit der Teilabfrage erreicht",unsafe_link:"Unsicherer Redfish-Verweis abgewiesen",tls_error:"TLS-Verbindung fehlgeschlagen"}[c.outcome];
+  if(failure)return t(failure);
   return ({forbidden_permission_or_license:t("Zugriff verweigert · Berechtigung oder Lizenz prüfen"),not_found:t("Nicht gefunden"),transport_error:t("Netzwerk- oder TLS-Fehler"),http_error:t("HTTP-Fehler · Status im alten Datensatz nicht gespeichert")})[c.outcome]??t("Nicht vollständig abgefragt");
 }
 // Preserve the DB history. Only combine identical transitions from distinct,

@@ -1,6 +1,8 @@
 pub mod api;
+mod assessment;
 pub mod collector;
 pub mod dsm;
+pub mod legacy_tls;
 pub mod model;
 pub mod store;
 pub mod vault;

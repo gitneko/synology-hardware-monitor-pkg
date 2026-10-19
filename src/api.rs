@@ -111,6 +111,8 @@ pub struct DeviceInput {
     pub repeat_seconds: Option<i64>,
     pub alerts_enabled: bool,
     pub enabled: bool,
+    #[serde(default)]
+    pub tls_profile: crate::model::TlsProfile,
     pub trust_mode: TrustMode,
     pub certificate_pem: Option<String>,
 }
@@ -125,6 +127,7 @@ impl Drop for DeviceInput {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustMode {
+    Pinned,
     Keep,
     System,
     Custom,
@@ -182,7 +185,15 @@ impl Api {
                     || device.get("ca_pem").is_some_and(|v| !v.is_null());
                 device.remove("ca_file");
                 device.remove("ca_pem");
-                device.insert("custom_trust".into(), json!(custom));
+                let fingerprint = device.remove("pinned_certificate_pem").and_then(|v| {
+                    v.as_str()
+                        .and_then(|pem| crate::legacy_tls::fingerprint(pem).ok())
+                });
+                device.insert("certificate_fingerprint".into(), json!(fingerprint));
+                device.insert(
+                    "custom_trust".into(),
+                    json!(custom || device["certificate_fingerprint"].is_string()),
+                );
                 if role != Role::Administrator {
                     device.remove("username");
                 }
@@ -534,13 +545,35 @@ fn prepare(store: &Store, vault: &Vault, input: &DeviceInput) -> Result<(Device,
         enabled: input.enabled,
         ca_file: None,
         ca_pem: None,
+        tls_profile: input.tls_profile,
+        pinned_certificate_pem: None,
     };
     match input.trust_mode {
         TrustMode::Keep => {
             if let Some((old, _, _)) = &existing {
                 device.ca_file = old.ca_file.clone();
                 device.ca_pem = old.ca_pem.clone();
+                if old.pinned_certificate_pem.is_some() {
+                    anyhow::ensure!(
+                        old.endpoint == device.endpoint && old.tls_profile == device.tls_profile,
+                        BoundaryError("device_pin_reimport_required")
+                    );
+                }
+                device.pinned_certificate_pem = old.pinned_certificate_pem.clone();
             }
+        }
+        TrustMode::Pinned => {
+            anyhow::ensure!(
+                input.tls_profile == crate::model::TlsProfile::Idrac7,
+                BoundaryError("device_certificate_invalid")
+            );
+            let pem = input
+                .certificate_pem
+                .as_ref()
+                .context(BoundaryError("device_certificate_invalid"))?;
+            crate::legacy_tls::certificate(pem)
+                .context(BoundaryError("device_certificate_invalid"))?;
+            device.pinned_certificate_pem = Some(pem.clone());
         }
         TrustMode::System => {}
         TrustMode::Custom => {
@@ -616,6 +649,7 @@ fn unhex(value: &str) -> Result<Vec<u8>> {
 }
 pub fn message(code: &str) -> &'static str {
     match code {
+        "connection_timeout"=>"Die Redfish-Datenbereiche haben nicht rechtzeitig geantwortet. Netzwerk und Auslastung des Controllers prüfen.",
         "backup_password_invalid"=>"Das Sicherungspasswort muss mindestens 12 Zeichen und höchstens 1024 UTF-8-Bytes lang sein.",
         "backup_busy"=>"Eine Sicherungsaktion läuft bereits. Bitte kurz warten.",
         "backup_invalid"=>"Sicherungsdatei oder Passwort ungültig. Es wurden keine Daten geändert.",
@@ -649,6 +683,10 @@ pub fn message(code: &str) -> &'static str {
         "write_https_required"=>"Geräteverwaltung erfordert eine HTTPS-Verbindung zu DSM.",
         "write_origin_invalid"=>"Die Herkunft der Anfrage wurde abgewiesen. Bitte die Anwendung direkt in DSM öffnen.",
         "connection_tls_or_network"=>"Verbindung fehlgeschlagen. Adresse, Netzwerk und Zertifikatsvertrauen prüfen; die TLS-Prüfung bleibt aktiv.",
+        "device_pin_reimport_required"=>"Bei geänderter Adresse oder geändertem Verbindungsmodus das Serverzertifikat erneut importieren.",
+        "connection_certificate_mismatch"=>"Das Serverzertifikat stimmt nicht mit dem importierten Zertifikat überein. An diese Verbindung wurden keine Zugangsdaten gesendet.",
+        "connection_certificate_expired"=>"Das Serverzertifikat ist abgelaufen oder noch nicht gültig. An diese Verbindung wurden keine Zugangsdaten gesendet.",
+        "connection_tls_incompatible"=>"Die TLS-Verbindung konnte nicht aufgebaut werden. TLS-Version und Verschlüsselungsverfahren des Controllers prüfen.",
         "connection_credentials_rejected"=>"Das Gerät hat die Zugangsdaten abgewiesen.",
         "connection_permission_denied"=>"Der Gerätebenutzer darf den Redfish-Dienst nicht lesen.",
         "connection_not_redfish"=>"Unter dieser Adresse wurde kein gültiger Redfish-Dienst gefunden.",
@@ -689,10 +727,76 @@ mod tests {
             repeat_seconds: None,
             alerts_enabled: true,
             enabled: true,
+            tls_profile: Default::default(),
             trust_mode: TrustMode::System,
             certificate_pem: None,
         }
     }
+    #[tokio::test]
+    async fn pinned_trust_is_explicit_bound_to_origin_and_not_returned_as_pem() {
+        let (_dir, api) = instance();
+        let mut input = input();
+        let original_password = input.password.clone().unwrap();
+        input.tls_profile = crate::model::TlsProfile::Idrac7;
+        assert!(prepare(&api.store.lock().unwrap(), &api.vault, &input).is_err());
+        input.certificate_pem = Some(crate::legacy_tls::tests::pem());
+        input.trust_mode = TrustMode::Custom;
+        assert!(prepare(&api.store.lock().unwrap(), &api.vault, &input).is_err());
+        input.trust_mode = TrustMode::Pinned;
+        let (device, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &input).unwrap();
+        api.store
+            .lock()
+            .unwrap()
+            .save_admin(&device, &secret, None, "admin-test")
+            .unwrap();
+        let (_, _, revision) = api.store.lock().unwrap().get(&device.id).unwrap().unwrap();
+        input.id = Some(device.id.clone());
+        input.revision = Some(revision);
+        input.password = None;
+        input.certificate_pem = None;
+        input.trust_mode = TrustMode::Keep;
+        let (kept, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &input).unwrap();
+        assert_eq!(kept.pinned_certificate_pem, device.pinned_certificate_pem);
+        assert_eq!(
+            &*api.vault.unseal(&device.id, &secret).unwrap(),
+            original_password.as_bytes()
+        );
+        let dashboard = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let row = &dashboard["data"]["devices"][0]["device"];
+        assert_eq!(row["tls_profile"], "idrac7");
+        assert!(row.get("pinned_certificate_pem").is_none());
+        assert!(row["certificate_fingerprint"]
+            .as_str()
+            .is_some_and(|s| s.len() == 95));
+        assert!(!dashboard.to_string().contains("BEGIN CERTIFICATE"));
+        input.endpoint = "https://other.example/".into();
+        input.password = Some("replacement-secret".into());
+        assert_eq!(
+            dsm::error_code(
+                &prepare(&api.store.lock().unwrap(), &api.vault, &input)
+                    .err()
+                    .unwrap()
+            ),
+            "device_pin_reimport_required"
+        );
+        input.endpoint = device.endpoint;
+        input.tls_profile = crate::model::TlsProfile::Standard;
+        assert!(prepare(&api.store.lock().unwrap(), &api.vault, &input).is_err());
+        input.trust_mode = TrustMode::System;
+        assert!(prepare(&api.store.lock().unwrap(), &api.vault, &input)
+            .unwrap()
+            .0
+            .pinned_certificate_pem
+            .is_none());
+    }
+
     fn instance() -> (tempfile::TempDir, Api) {
         let dir = tempfile::tempdir().unwrap();
         let vault = Arc::new(Vault::open(&dir.path().join("master.key")).unwrap());
@@ -909,7 +1013,10 @@ mod tests {
                     language: Default::default(),
                     revision: 0,
                     desktop_enabled: true,
-                    selection: Default::default(),
+                    selection: crate::notification::Selection {
+                        monitoring: Some(false),
+                        ..Default::default()
+                    },
                 },
             },
         );
@@ -926,6 +1033,7 @@ mod tests {
         let (policy, revision) = api.store.lock().unwrap().notification_settings().unwrap();
         assert_eq!(revision, 1);
         assert_eq!(policy.desktop_recipient.as_deref(), Some("admin-test"));
+        assert_eq!(policy.selection.monitoring, Some(false));
         assert!(api
             .authorized(&req, "admin-test", Role::Administrator)
             .await

@@ -2,6 +2,46 @@
 
 Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 frontend tests. Build 0018 changes packaging/CI/documentation and adds seven isolated release-publication tests. Current package hashes and source identity are recorded in `dist/current/latest-assets/build-manifest.json` and `SHA256SUMS`; test output is retained in Actions logs. Source archives intentionally exclude `dist` and private runtime state.
 
+## Build 0025 query notification selection
+
+Regression checks cover query warning/critical alarms with hardware severity disabled, query exclusion while hardware severity stays enabled, query repeat/recovery switches, exact legacy settings behavior and serialization, both delivery queues, local history retention, restart persistence, and the actual Vue checkbox with saved and legacy choices. This change does not alter collection or controller access.
+
+The 66 Rust and 34 frontend tests passed, as did formatting and Clippy. The new queue regression uses isolated local state and verifies SMTP and desktop job selection without contacting external recipients. No live controller access was needed for this notification-only change; actual NAS acceptance of the new checkbox remains pending.
+
+## Build 0024 applicability
+
+Regression checks cover explicitly disabled functions, preservation of Warning/Critical states, positive evidence for empty controllers and their explicitly linked representations, inconsistent or paginated inventories, unavailable controllers, and PowerControl measurements without health status. Frontend checks cover overall health, neutral reason labels, old snapshots, unsupported reason codes, retained faults, stale data and incomplete coverage. A storage regression confirms that a neutral unknown cannot clear an earlier critical alarm.
+
+The authorized certificate-pinned iDRAC8 2.86.86.86 test with the actual updated Rust collector completed in 70.686 seconds: 116 available resources, 158 observations including coverage, 2939 log entries, complete log coverage and no query failures. The hardware observations contained 37 OK states and four unknowns, all explained by applicability: a status-free PowerControl measurement, Disabled power-supply redundancy, and the empty S130 Storage/StorageController representations. The production frontend overall calculation returned OK with no remaining unexplained unknowns. Temporary local test state was removed. This establishes live collection and calculation, while NAS installation remains to be confirmed. The 63 Rust, 33 frontend and seven release unit tests passed; formatting and Clippy passed.
+
+## Build 0023 older iDRAC authentication and timing
+
+The user confirmed partial readings on 0022, with a 90-second deadline at an iDRAC7 voltage sensor, and reported the same deadline on iDRAC8 RAID/log resources. The older `/Managers/.../Logs/Lclog` spelling was not recognized by the log-priority classifier; it is now included alongside LogServices paths.
+
+An authorized, certificate-pinned iDRAC8 2.86.86.86 diagnosis compared repeated Basic authentication with one temporary Redfish session. Early Basic reads took roughly 5–10 seconds each. A token-based diagnostic completed 53 hardware resources in about 47 seconds and the whole 114-resource graph in about 117 seconds, including login/logout overhead. The actual corrected Rust collector then completed 114 resources, 156 observations including coverage records, and 2864 hardware-log entries in 78.809 seconds, with every capability available, complete log coverage and an OK collector result. Temporary local test state was removed. Credentials, tokens, raw logs and private diagnostic helpers are excluded from source/package artifacts. This verifies that live collection; NAS installation of 0023 and complete iDRAC7 collection remain to be confirmed.
+
+Tests cover session login/logout on Standard and pinned transports, token-only subsequent reads, unsupported-session fallback, rejected session POST redirects, unsafe logout locations never becoming hardware DELETE requests, cancellation cleanup, token/credential output exclusion, endpoint confinement and profile-aware freshness. The iDRAC7/8 profile now permits 300 seconds; Standard remains at 90 seconds. Other scan limits and non-overlapping scheduling remain unchanged.
+
+## Build 0022 bounded partial polling and diagnostics
+
+The user confirmed that the 0021 probe reaches all three protected collections, but no complete snapshot newer than 09:03:08 was saved and the generic collector alarm was reconfirmed at 09:39:06. The old message does not establish the failing resource or cause. Authenticated live collection remains unverified by the agent.
+
+The collector previously discarded every reading if any later JSON response was invalid or the 90-second, 256-resource, 16-MiB or 4096-item budgets were reached. The new regression reproduces the discarded poll against the 0021 static binary. Build 0022 gives hardware reads priority over LogServices reads and retains already validated resources on these bounded aborts. Invalid child responses are isolated; root failure, authentication rejection and certificate mismatch/expiry remain fatal. Incomplete results have explicit coverage and collector warnings, never a successful collector status. Limits are unchanged. Hardware-log initialization remains incomplete until a complete scan, so partial initial scans do not replay historical alarms.
+
+The DHE fixture now checks malformed log JSON, a 4097-entry expanded log page, a linked log collection exceeding 256 resources, and an actual 90-second full-poll deadline. Each case must preserve the temperature reading, save a current partial snapshot, retain the incomplete-log flag and expose a classified reason/path. Fatal pin failure is recorded in the active collector alarm with a safe URI and reason. Query strings, raw response bodies and arbitrary internal error strings are excluded from these diagnostics. Unit tests also verify redaction and English rendering.
+
+## Build 0021 iDRAC7 polling correction
+
+The user installed 0020 on the RS2416RP+ / DSM 7.3.2-86009 Update 4. The probe reached the public Redfish root but polling recorded transport errors for Systems, Chassis and Managers. A read-only anonymous reproduction with the old pinned transport returned the root and some HTTP 401 collection responses after roughly four seconds per fresh TLS connection, then hit the ten-second request timeout on another collection. A separate HTTP/1.1 keep-alive comparison returned subsequent root/collection responses within a fraction of a second after the initial handshake. This supports repeated handshake overhead as a contributor; it does not prove authenticated hardware coverage.
+
+The pinned client now reuses its verified connection, discards it on request cancellation/failure, and permits one verified reconnect for an idle disconnect. The DHE-only integration fixture now has a public root, three protected collections and a complete seven-resource graph including a temperature reading. It checks rejected credentials behind the public root, successful probe access to all three collections, a full poll with real measurements using one TLS connection, explicit and silent disconnects, and a certificate change on reconnect rejected before HTTP/auth. Existing wrong/reissued certificate, validity, protocol, redirect and response-size checks remain. The corrected transport also reached the real service root in about eight seconds, then all three protected collections returned anonymous HTTP 401 in 7–26 milliseconds over that same connection. Live authenticated monitoring and NAS acceptance of 0021 still require confirmation on the target.
+
+## Build 0020 iDRAC7 compatibility
+
+The new mode has 55 Rust unit tests and 29 frontend tests, including rendering the actual device editor. Tests cover exact leaf matching, validity dates, deliberate enrollment, endpoint-bound pin retention, old configurations defaulting to Standard and encrypted backup/restore preserving the pin while pausing devices. The dedicated loopback suite uses a DHE-only TLS 1.2 server and self-signed CA:TRUE certificates without SANs. It verifies rejection before HTTP/auth for a wrong certificate, a reissued certificate sharing the same key, expiry and TLS 1.1; safe redirects, response limits and normal polling are exercised. Both this suite and existing Redfish/SMTP integration checks are mandatory in the static package pipeline.
+
+An anonymous, read-only service-root GET using the new transport against a user-provided Dell R420 / iDRAC7 2.63.60.62 returned HTTP 200 and Redfish 1.0.2 with the exact provided certificate. No device credentials were supplied, and no controller settings were changed. This establishes TLS/pin interoperability only; authenticated monitoring, hardware-resource coverage and installation of build 0020 on the user's NAS still require target acceptance.
+
 ## Local checks
 
 Rust tests cover health normalization, URI restrictions, unavailable readings, event transitions, preserved faults, PSU identity, explicit relationship grouping, multi-cause/partial recovery, queue progress/cancellation, credential encryption, additive database changes, session/role/origin/CSRF checks, backup atomicity, CSV formula protection and monotonic event IDs.

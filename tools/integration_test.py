@@ -19,6 +19,8 @@ BINARY = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "target/de
 VERSION = subprocess.check_output([str(BINARY), "--version"], text=True).strip().split()[-1]
 state = {"storage_failures": 0, "storage_forced_status": 0, "fan_state": "Enabled", "health": "Critical", "storage": True, "log": "old", "redirect": False, "reject": False}
 requests = []
+SESSION_TOKEN = 'synthetic-standard-session-token'
+state.update(sessions=False, session_active=False, session_posts=0, session_deletes=0, session_redirect=False)
 
 class Mock(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -26,7 +28,7 @@ class Mock(BaseHTTPRequestHandler):
 
     def do_GET(self):
         requests.append(self.path)
-        if self.headers.get("Authorization") != "Basic " + base64.b64encode(b"monitor:integration-secret").decode():
+        if self.headers.get("Authorization") != "Basic " + base64.b64encode(b"monitor:integration-secret").decode() and not (state['session_active'] and self.headers.get('X-Auth-Token')==SESSION_TOKEN):
             self.send_error(401); return
         if state["reject"]:
             self.send_error(401); return
@@ -58,9 +60,30 @@ class Mock(BaseHTTPRequestHandler):
             self.send_error(403); return
         if self.path not in data:
             self.send_error(404); return
+        if state['sessions'] and self.path == '/redfish/v1/root/':
+            data[self.path]['Links'] = {'Sessions': {'@odata.id': '/redfish/v1/Sessions'}}
         payload = json.dumps(data[self.path]).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
+
+    def do_POST(self):
+        assert self.path == '/redfish/v1/Sessions'
+        state['session_posts'] += 1
+        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        assert body == {'UserName':'monitor','Password':'integration-secret'}
+        self.send_response(307 if state['session_redirect'] else 201)
+        self.send_header('Location','/redfish/v1/Chassis' if state['session_redirect'] else '/redfish/v1/Sessions/owned')
+        self.send_header('X-Auth-Token',SESSION_TOKEN)
+        self.send_header('Content-Length','2')
+        self.end_headers(); self.wfile.write(b'{}')
+        state['session_active'] = not state['session_redirect']
+
+    def do_DELETE(self):
+        assert self.path == '/redfish/v1/Sessions/owned'
+        assert self.headers.get('X-Auth-Token') == SESSION_TOKEN
+        state['session_deletes'] += 1
+        state['session_active'] = False
+        self.send_response(204); self.send_header('Content-Length','0'); self.end_headers()
 
 with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
     temp = Path(temp)
@@ -81,6 +104,7 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         p = subprocess.run([str(BINARY), "--state", str(temp / "private"), "--socket", str(temp / "api.sock"), *args], input=password, capture_output=True, env=env)
         assert (p.returncode == 0) == success, (args, p.stderr.decode())
         assert b"integration-secret" not in p.stdout + p.stderr
+        assert SESSION_TOKEN.encode() not in p.stdout + p.stderr
         return p.stdout
     def put():
         config_file.write_text(json.dumps(config))
@@ -98,7 +122,16 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         requests.clear()
         root_test = json.loads(run("device-test", "--file", str(config_file), password=b"integration-secret\n"))
         assert root_test["reachable"] is True and root_test["systems"] is True
-        assert requests == ["/redfish/v1/", "/redfish/v1/root/"]
+        assert root_test["checked_collections"] == 2
+        assert requests == ["/redfish/v1/", "/redfish/v1/root/", "/redfish/v1/Systems", "/redfish/v1/Chassis"]
+        state['sessions'] = True
+        run('device-test','--file',str(config_file),password=b'integration-secret\n')
+        assert state['session_posts']==state['session_deletes']==1 and not state['session_active']
+        state['session_redirect'] = True
+        requests.clear()
+        run('device-test','--file',str(config_file),password=b'integration-secret\n',success=False)
+        assert requests == ['/redfish/v1/','/redfish/v1/root/']
+        state['sessions'] = state['session_redirect'] = False
         # Web-imported PEM trust takes the same strict TLS path as CLI CA files.
         inline = {**config, "ca_file": None, "ca_pem": (temp/"ca.crt").read_text()}
         config_file.write_text(json.dumps(inline))
@@ -224,10 +257,19 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             assert not worker.is_alive()
             forwarded=received[-1]
             assert forwarded["locale"]=="en"
-            assert forwarded["csrf"]==body["csrf"] and forwarded["operation"]==body["operation"]
+            expected=json.loads(json.dumps(body["operation"]))
+            expected["device"]["tls_profile"]="standard"
+            assert forwarded["csrf"]==body["csrf"] and forwarded["operation"]==expected
             assert forwarded["auth"]["environment"]["HTTP_ORIGIN"]==post_env["HTTP_ORIGIN"]
             assert forwarded["auth"]["environment"]["HTTPS"]=="on"
             assert b"Status: 200 OK" in posted
+            # The new explicit profile and certificate survive the same bridge.
+            pinned=json.loads(json.dumps(body))
+            pinned["operation"]["device"].update(tls_profile="idrac7",trust_mode="pinned",certificate_pem=(temp/"ca.crt").read_text())
+            payload=json.dumps(pinned).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
+            worker=threading.Thread(target=mock_reply);worker.start()
+            posted=run("cgi",env=post_env,password=payload);worker.join(6)
+            assert not worker.is_alive() and received[-1]["operation"]==pinned["operation"]
             # A backup larger than the normal form limit crosses the CGI bridge;
             # regular device forms retain their strict 128 KiB limit.
             backup={"csrf":"synthetic-package-token","operation":{"action":"backup_inspect","file":"A"*(200*1024),"password":"synthetic-backup-password"}}

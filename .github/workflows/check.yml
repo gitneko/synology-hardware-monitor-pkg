@@ -43,7 +43,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl python3
+        run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl perl python3
       - name: Build pinned musl toolchain
         run: sh tools/bootstrap_musl.sh
       - name: Build and validate both DSM packages
