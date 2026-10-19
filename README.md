@@ -2,7 +2,7 @@
 
 *This Synology package and code was developed by GPT-6.1 Sol and tested by humans.*
 
-Open-source, cross-vendor server hardware monitoring on a Synology NAS using Redfish.
+Open-source, cross-vendor server hardware monitoring using Redfish on a Synology NAS.
 
 Due to thirdparty package limitations imposed by Synology, this package does not integrate natively into Synology notifications
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
