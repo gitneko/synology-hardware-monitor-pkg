@@ -1,12 +1,12 @@
 # Hardware and firmware compatibility
 
-## Tested systems and remaining targets
+## Supported platform and tested systems
 
-The maintained package targets DSM 7 on x86_64 platforms.
+The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). Its functions have been tested with iDRAC7, iDRAC8, iDRAC9 and iLO 5 on the systems listed here and in the [README](../README.md).
 
-| Target | Evidence |
+| Tested system | Evidence |
 |---|---|
-| Dell PowerEdge R340 / iDRAC9 Enterprise | Read-only live discovery and user-confirmed polling/PSU fault and notification workflows; initial recorded firmware 7.00.00.183, Redfish 1.17.0 |
+| Dell PowerEdge R340 / iDRAC9 7.00.00.185 | Read-only live discovery and user-confirmed polling/PSU fault and notification workflows |
 | Dell PowerEdge R420 / iDRAC7 2.63.60.62 | Testing confirmed by the user on 19 October 2026; hardware readings and Fan1B/redundancy alarms observed. Earlier polling deadline issues are documented in the historical validation records |
 | Dell PowerEdge R330 / iDRAC8 2.86.86.86 | Testing confirmed by the user on 19 October 2026. Authorized 0024 collector test: 116 resources and 2939 log entries, complete coverage without query errors, 70.686 seconds; all four previously unknown observations explained as not applicable, frontend overall OK |
 | HPE ProLiant DL160 Gen10 / iLO 5 v3.22 | Authorized read-only account: session login, three protected collections, server details and complete build-0027 collector runs verified with exact certificate pinning; license entitlements were not checked |
@@ -22,6 +22,6 @@ The collector follows advertised Redfish resources, selected HPE SmartStorage li
 
 Dell documents Redfish across iDRAC7/8 and states that Redfish is included across license levels, while individual operations still require authorization and some authentication integrations have separate license requirements. That supports targeting ordinary read-only accounts, not a blanket guarantee for every OEM resource. [Dell authentication/authorization guide](https://www.dell.com/support/manuals/en-us/idrac7-8-lifecycle-controller-v2.60.60.60/idrac_2.60.60.60_redfishapiguide/redfish-authentication-and-authorization?guid=guid-d572792f-afd2-499a-bf12-38a6778b9bbc&lang=en-us).
 
-HPE documents the iLO RESTful API for iLO 5 and Gen10 storage interfaces. The application requests no Advanced-only control/console functionality and is intended to work without Advanced. Read-only collection has been demonstrated on the DL160 Gen10 with iLO 5 v3.22. The test did not inspect license entitlements or certify complete coverage without Advanced. [HPE API overview](https://developer.hpe.com/platform/ilo-restful-api/home/), [HPE storage model](https://developer.hpe.com/blog/storage-management-with-redfish/), [HPE iLO licensing information](https://www.hpe.com/us/en/collaterals/collateral.c04154343.html).
+HPE documents the iLO RESTful API for iLO 5 and Gen10 storage interfaces. The application requests no Advanced-only control/console functionality. Read-only collection has been demonstrated on the DL160 Gen10 with iLO 5 v3.22. The test did not inspect license entitlements or certify complete coverage without Advanced. [HPE API overview](https://developer.hpe.com/platform/ilo-restful-api/home/), [HPE storage model](https://developer.hpe.com/blog/storage-management-with-redfish/), [HPE iLO licensing information](https://www.hpe.com/us/en/collaterals/collateral.c04154343.html).
 
 Vendor documentation was rechecked on 18 October 2026. It establishes interface availability, not complete application interoperability. No broad claim of universal RAID, OEM sensor or threshold-schema coverage is made. Standard health fields and selected embedded sensor/threshold forms are supported; additional schemas require fixtures and tests. SNMP fallback/traps are not implemented yet.

@@ -2,11 +2,14 @@
 
 Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 frontend tests. Build 0018 changes packaging/CI/documentation and adds seven isolated release-publication tests. Current package hashes and source identity are recorded in `dist/current/latest-assets/build-manifest.json` and `SHA256SUMS`; test output is retained in Actions logs. Source archives intentionally exclude `dist` and private runtime state.
 
-## Current confirmed Dell systems (19 October 2026)
+## Current confirmed platform and systems (19 October 2026)
+
+The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). The user confirms that its functions have been tested with iDRAC7, iDRAC8, iDRAC9 and iLO 5 on the hardware listed in the [README](../README.md).
 
 - Dell PowerEdge R420 / iDRAC7 2.63.60.62: testing confirmed by the user; hardware readings and fan/redundancy alarms were observed.
 - Dell PowerEdge R330 / iDRAC8 2.86.86.86: testing confirmed by the user; the authorized build-0024 collector run completed 116 resources without query failures and the overall health calculation returned OK.
 - Dell PowerEdge R340 / iDRAC9 Enterprise: previously demonstrated live discovery and user-confirmed polling, PSU fault and notification workflows.
+- HPE ProLiant DL160 Gen10 / iLO 5 v3.22: testing confirmed by the user; authorized read-only session access and complete build-0027 collector runs verified with exact server-certificate pinning.
 
 These records apply to the tested systems. Earlier build sections below describe the evidence and outstanding checks at that stage of development; their historical limitations do not replace this current compatibility status. Model/firmware details are maintained in [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 

@@ -2,7 +2,7 @@
 
 ## Decision
 
-The maintained release contains one DSM 7 SPK with `arch="x86_64"`. Build **0026** removes the former legacy package profile, launcher and release artifact. The minimum DSM version remains **7.0-40761**.
+The maintained release contains one SPK for Synology DSM 7.0 and later with `arch="x86_64"`. The minimum DSM version remains **7.0-40761**.
 
 Synology documents architecture-family selectors in its [INFO necessary fields](https://help.synology.com/developer-guide/synology_package/INFO_necessary_fields.html), and lists **geminilake** and **v1000** in the **x86_64** family in [Appendix A](https://help.synology.com/developer-guide/appendix/platarchs.html). This is an architecture-family selector, not `*` or `noarch`. The package contains an x86_64 executable.
 

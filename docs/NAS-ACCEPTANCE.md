@@ -1,12 +1,12 @@
 # NAS acceptance checklist and confirmed results
 
-Target: RS2421RP+ / v1000 / DSM 7.4.1-90080. The user installs packages manually. No agent-side NAS login, package installation or hardware configuration change is implied by local checks.
+The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). NAS acceptance records below use RS2421RP+ / v1000 / DSM 7.4.1-90080 and DS220+ / geminilake / 7.4.1-90080. The user installs packages manually. No agent-side NAS login, package installation or hardware configuration change is implied by local checks.
 
 ## Confirmed by the user
 
 Installation/service/menu, internal DSM window, positive DSM sign-in after session/cache fixes, device creation/editing including certificate/address/password, R340 polling, PS1 critical handling, Gmail test and automatic reminder delivery, native desktop test/critical reminder with resolved details and error severity. App backup/restore from build 0016 was also tested successfully. The user confirms successful installation of the grouped DSM 7 x86_64 build 0018.
 
-The user subsequently confirmed testing of the Dell PowerEdge R420/iDRAC7 and Dell PowerEdge R330/iDRAC8. The R330 also passed a complete authorized live collector run and overall health calculation. See [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
+The user confirms that the functions have been tested with Dell PowerEdge R420/iDRAC7, Dell PowerEdge R330/iDRAC8, Dell PowerEdge R340/iDRAC9 and HPE ProLiant DL160 Gen10/iLO 5 v3.22, as listed in the [README](../README.md). The R330 also passed a complete authorized live collector run and overall health calculation; complete read-only iLO 5 collection is recorded for build 0027. See [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 
 ## Current acceptance (language changes from 0017; grouped package from 0018)
 

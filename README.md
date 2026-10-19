@@ -21,7 +21,7 @@ You can choose if you want either, none or both.
 
 ## Compatibility and evidence
 
-DSM 7 is the supported NAS platform.
+The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). Its functions have been tested with iDRAC7, iDRAC8, iDRAC9 and iLO 5 on the hardware listed below.
 
 | Platform | Status |
 |---|---|
@@ -29,7 +29,7 @@ DSM 7 is the supported NAS platform.
 | Dell PowerEdge R420 / iDRAC7 | Complete live polling and overall health assessment verified |
 | Dell PowerEdge R330 / iDRAC8 | Complete live polling and overall health assessment verified |
 | Dell PowerEdge R340 / iDRAC9 | Complete live polling and overall health assessment verified |
-| HPE ProLiant Gen10 / iLO 5 3.22 | Complete live polling and overall health assessment verified |
+| HPE ProLiant DL160 Gen10 / iLO 5 3.22 | Complete live polling and overall health assessment verified |
 
 No universal RAID/OEM or production-reliability claim is made. **SNMP polling/traps are not implemented yet.** See [hardware compatibility](docs/HARDWARE-COMPATIBILITY.md), [validation](docs/VALIDATION.md) and [roadmap](docs/ROADMAP.md).
 
