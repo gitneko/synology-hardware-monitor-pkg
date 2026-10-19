@@ -5,6 +5,7 @@ export function measurementSnapshot(device) {
 }
 export function overall(device) {
   if (device.stale || !measurementSnapshot(device)) return 'unknown';
+  if (['ok','warning','critical','unknown','acknowledged'].includes(device.overall_status)) return device.overall_status;
   if (device.alarms.some(a=>a.health==='critical')) return 'critical';
   if (device.alarms.some(a=>a.health==='warning')) return 'warning';
   if (device.snapshot.capabilities.some(c=>c.outcome!=='available')) return 'unknown';
@@ -14,7 +15,7 @@ export function overall(device) {
   if (!states.length || states.some(o=>o.health==='unknown')) return 'unknown';
   return 'ok';
 }
-export const labels={get ok(){return t('In Ordnung')},get warning(){return t('Warnung')},get critical(){return t('Kritisch')},get unknown(){return t('Nicht vollständig bewertbar')}};
+export const labels={get acknowledged(){return t('Bestätigt')},get ok(){return t('In Ordnung')},get warning(){return t('Warnung')},get critical(){return t('Kritisch')},get unknown(){return t('Nicht vollständig bewertbar')}};
 export function assessmentReason(observation,snapshot) {
   if (observation.health!=='unknown') return '';
   switch(snapshot?.assessment_exclusions?.[observation.key]) {
@@ -24,11 +25,12 @@ export function assessmentReason(observation,snapshot) {
     default:return '';
   }
 }
-export function observationStatus(observation,snapshot) {return assessmentReason(observation,snapshot)?'not_applicable':observation.health;}
-export function observationLabel(observation,snapshot) {return assessmentReason(observation,snapshot)?t('Nicht relevant'):labels[observation.health];}
+export function observationStatus(observation,snapshot,device) {return device?.alarm_statuses?.[observation.key]?.status??( assessmentReason(observation,snapshot)?'not_applicable':observation.health);}
+export function observationLabel(observation,snapshot,device) {const status=observationStatus(observation,snapshot,device);return status==='not_applicable'?t('Nicht relevant'):labels[status];}
 export function timestamp(seconds) { return seconds ? new Date(seconds*1000).toLocaleString(dateLocale()) : t("Noch keine Abfrage"); }
 
-export function primaryAlarms(device){return device.alarms.filter(a=>!a.covered_by?.length);}
-export function summaryAlarms(device){return device.alarms.filter(a=>a.covered_by?.length);}
-export function alarmConfirmation(alarm){return alarm.current_health==='unknown'?t("Gespeicherter Fehler · aktuell nicht bewertbar"):alarm.current_health?t("Aktuell bestätigt"):t("Gespeicherter Fehler");}
+export function primaryAlarms(device,filter='all'){return device.alarms.filter(a=>!a.covered_by?.length && matchesAlarm(a,filter));}
+export function summaryAlarms(device,filter='all'){return device.alarms.filter(a=>a.covered_by?.length && matchesAlarm(a,filter));}
+function matchesAlarm(alarm,filter){return filter==='all'||(filter==='acknowledged')===(alarm.assessment?.status==='acknowledged');}
+export function alarmConfirmation(alarm){return alarm.current_health==='unknown'?t("Gespeicherter Fehler · aktuell nicht bewertbar"):alarm.current_health?t("Aktuell gemessen"):t("Gespeicherter Fehler");}
 export function coveredLabels(alarm,device){return (alarm.covered_by??[]).map(key=>device.alarms.find(a=>a.key===key)?.label??key).join(', ');}

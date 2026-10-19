@@ -55,6 +55,14 @@ pub enum Operation {
     MailTest {
         mail: crate::mail::Input,
     },
+    AlarmAcknowledge {
+        id: String,
+        revision: i64,
+        key: String,
+        token: String,
+        acknowledged: bool,
+        reason: String,
+    },
     EventsExport {
         filter: crate::history::Filter,
     },
@@ -253,6 +261,26 @@ impl Api {
             self.mail_gate.lock().await
         };
         match &request.operation {
+            Operation::AlarmAcknowledge {
+                id,
+                revision,
+                key,
+                token,
+                acknowledged,
+                reason,
+            } => {
+                self.store.lock().unwrap().acknowledge_alarm(
+                    id,
+                    *revision,
+                    key,
+                    token,
+                    *acknowledged,
+                    reason,
+                    actor,
+                    crate::now(),
+                )?;
+                Ok(json!({"ok":true}))
+            }
             Operation::EventsExport { filter } => {
                 let store = self.store.lock().unwrap();
                 let (csv, count) = store.events_csv_localized(filter, request.locale)?;
@@ -444,6 +472,19 @@ impl Api {
             }
             Operation::Dashboard => unreachable!(),
         }
+    }
+
+    pub async fn deliver_legacy(&self) -> Result<()> {
+        let _guard = self.mail_gate.lock().await;
+        let pending = self.store.lock().unwrap().pending(crate::now())?;
+        for (id, kind, health, message) in pending {
+            let success = dsm::notify(&kind, &health, &message).await.is_ok();
+            self.store
+                .lock()
+                .unwrap()
+                .delivery(id, success, crate::now())?;
+        }
+        Ok(())
     }
 
     pub async fn deliver_one_mail(&self) -> Result<()> {
@@ -674,6 +715,9 @@ pub fn message(code: &str) -> &'static str {
         "desktop_test_unavailable"=>"Der DSM-Desktop-Aufruf ist unter der Paketidentität nicht verfügbar.",
         "desktop_test_rejected"=>"DSM hat den Desktop-Test abgewiesen. Es wurden keine Paketberechtigungen erweitert.",
         "desktop_test_timeout"=>"DSM hat den Desktop-Test nicht rechtzeitig bestätigt. Bitte vor einem erneuten Versuch die Benachrichtigungen prüfen.",
+        "alarm_conflict"=>"Der Alarm wurde zwischenzeitlich geändert oder beendet. Bitte neu laden.",
+        "alarm_not_acknowledgeable"=>"Bitte einen eigenständigen Hardwarealarm oder seine konkrete Ursache auswählen.",
+        "alarm_reason_invalid"=>"Bitte eine Begründung mit höchstens 1000 UTF-8-Bytes ohne Steuerzeichen angeben.",
         "device_conflict"=>"Das Gerät wurde zwischenzeitlich geändert oder entfernt. Bitte neu laden.",
         "device_password_required"=>"Bitte ein Passwort angeben. Bei Wechsel von Adresse oder Benutzer ist ein neues Passwort erforderlich.",
         "device_certificate_invalid"=>"Das Zertifikat ist ungültig. Bitte nur PEM-Zertifikate ohne privaten Schlüssel importieren.",
@@ -700,6 +744,141 @@ pub fn message(code: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn acknowledgement_waits_for_submission_gate_and_later_polls_keep_the_decision() {
+        let (_dir, api) = instance();
+        let (device, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &input()).unwrap();
+        let now = crate::now();
+        let snapshot = crate::model::Snapshot {
+            observations: vec![crate::model::Observation {
+                key: "fan".into(),
+                label: "Fan".into(),
+                health: crate::model::Health::Critical,
+                reading: None,
+                unit: None,
+            }],
+            ..Default::default()
+        };
+        {
+            let mut s = api.store.lock().unwrap();
+            s.put(&device, &secret).unwrap();
+            s.apply(&device, &snapshot, now).unwrap();
+        }
+        let token = api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            ["fan"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let req = request(
+            &api,
+            Operation::AlarmAcknowledge {
+                id: device.id.clone(),
+                revision: 1,
+                key: "fan".into(),
+                token,
+                acknowledged: true,
+                reason: "Known input fault".into(),
+            },
+        );
+        let submission = api.mail_gate.lock().await;
+        let mut action = Box::pin(api.authorized(&req, "admin-test", Role::Administrator));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut action)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]["fan"]
+                ["status"],
+            "critical"
+        );
+        drop(submission);
+        action.await.unwrap();
+        api.store
+            .lock()
+            .unwrap()
+            .apply(&device, &snapshot, now + 1)
+            .unwrap();
+        assert_eq!(
+            api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]["fan"]
+                ["status"],
+            "acknowledged"
+        );
+        api.deliver_one_mail().await.unwrap();
+    }
+    #[tokio::test]
+    async fn acknowledgement_uses_native_actor_and_rejects_viewers_stale_tokens_and_invalid_csrf() {
+        let (_dir, api) = instance();
+        let (device, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &input()).unwrap();
+        let now = crate::now();
+        {
+            let mut s = api.store.lock().unwrap();
+            s.put(&device, &secret).unwrap();
+            s.apply(
+                &device,
+                &crate::model::Snapshot {
+                    observations: vec![crate::model::Observation {
+                        key: "fan".into(),
+                        label: "Fan".into(),
+                        health: crate::model::Health::Critical,
+                        reading: None,
+                        unit: None,
+                    }],
+                    ..Default::default()
+                },
+                now,
+            )
+            .unwrap();
+        }
+        let token = api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            ["fan"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let operation = || Operation::AlarmAcknowledge {
+            id: device.id.clone(),
+            revision: 1,
+            key: "fan".into(),
+            token: token.clone(),
+            acknowledged: true,
+            reason: "Verified sensor fault".into(),
+        };
+        let req = request(&api, operation());
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&req, "admin-test", Role::Viewer)
+                    .await
+                    .unwrap_err()
+            ),
+            "write_administrator_required"
+        );
+        let mut invalid = request(&api, operation());
+        invalid.csrf = None;
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&invalid, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "write_csrf_invalid"
+        );
+        api.authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert_eq!(
+            api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]["fan"]
+                ["acknowledgement"]["actor"],
+            "admin-test"
+        );
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&req, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "alarm_conflict"
+        );
+    }
     #[test]
     fn connection_response_errors_have_specific_translated_messages() {
         for code in [

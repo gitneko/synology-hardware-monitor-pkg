@@ -98,7 +98,9 @@ impl Store {
                 .with_timezone(&zone)
                 .format(&settings.date_format)
                 .to_string();
-            let mail = if e["delivered"].is_number() {
+            let mail = if text("mail_reason") == "acknowledged" {
+                "acknowledged"
+            } else if e["delivered"].is_number() {
                 "smtp_accepted"
             } else if e["cancelled"] == true {
                 "cancelled"
@@ -108,7 +110,9 @@ impl Store {
                 text("mail_reason")
             };
             let desktop = &e["desktop"];
-            let desktop_status = if desktop["delivered"].is_number() {
+            let desktop_status = if text("desktop_reason") == "acknowledged" {
+                "acknowledged"
+            } else if desktop["delivered"].is_number() {
                 "submitted"
             } else if desktop["cancelled"] == true {
                 "cancelled"

@@ -280,15 +280,8 @@ async fn serve(
                 }
                 if notify && delivery.is_empty() && Instant::now()>=next_delivery {
                     next_delivery=Instant::now()+Duration::from_secs(10);
-                    let store=store.clone();
-                    delivery.spawn(async move {
-                        let pending=store.lock().unwrap().pending(now()).unwrap_or_default();
-                        for (id,kind,health,message) in pending {
-                            let success=dsm::notify(&kind,&health,&message).await.is_ok();
-                            if !success {eprintln!("DSM notification {id} failed; retry queued");}
-                            if store.lock().unwrap().delivery(id,success,now()).is_err() {eprintln!("notification status persistence failed");}
-                        }
-                    });
+                    let api=worker_api.clone();
+                    delivery.spawn(async move {if api.deliver_legacy().await.is_err(){eprintln!("legacy notification worker failed; details excluded");}});
                 }
             }
         }

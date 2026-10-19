@@ -12,6 +12,7 @@ export function eventType(event) {
   return category==='monitoring'?t("Abfragewarnung"):t("Hardwarealarm");
 }
 export function emailDeliveryText(event) {
+  if(event.mail_reason==='acknowledged')return event.submitted_recipients?t('E-Mail: durch Bestätigung unterdrückt · {0} bereits per SMTP angenommen',event.submitted_recipients):t('E-Mail: durch Bestätigung unterdrückt');
   if(event.mail_reason==='aggregate')return t("Sammelmeldung gebündelt · {0}",event.submitted_recipients?t("{0} bereits per SMTP angenommen",event.submitted_recipients):t("keine zusätzliche E-Mail"));
   if(event.transport==='smtp') {
     const progress=`${event.submitted_recipients??0}/${event.total_recipients??0}`;
@@ -30,6 +31,7 @@ export function emailDeliveryText(event) {
 }
 export function deliveryText(event) {
   const email=emailDeliveryText(event),desktop=event.desktop;
+  if(event.desktop_reason==='acknowledged')return t('{0} · DSM-Desktop: durch Bestätigung unterdrückt',email);
   if(event.desktop_reason==='aggregate')return t("{0} · DSM-Desktop: Sammelmeldung gebündelt",email);
   if(desktop){
     const state=desktop.delivered?t("an DSM übergeben"):desktop.cancelled?t('storniert'):desktop.attempts>=8?t("Versandfehler"):desktop.error?t("erneuter Versuch vorgemerkt"):t('vorgemerkt');

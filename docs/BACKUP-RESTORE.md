@@ -14,7 +14,7 @@ The Backup page downloads a `.hmbackup` file after matching password entries. Pa
 
 The archive includes devices and credentials, inline certificates, settings/templates/languages, snapshots, alarms, hardware-log fingerprints, events, delivery history and audit data. External CA files used by the CLI are embedded as verified PEM certificate contents. The local master key is not exported: device and SMTP secrets travel inside the encrypted archive and are encrypted again with the destination's local key during restore.
 
-The authenticated envelope uses AES-256-GCM, a random 16-byte salt, a random 12-byte nonce and PBKDF2-HMAC-SHA256 with 600,000 iterations. The logical archive format is **2**; format-1 archives from build 0016 are migrated by appending absent event context. Older apps cannot be assumed to read new archives. The same envelope header is retained; its authenticated payload carries the logical format version.
+The authenticated envelope uses AES-256-GCM, a random 16-byte salt, a random 12-byte nonce and PBKDF2-HMAC-SHA256 with 600,000 iterations. The logical archive format is **3**, including alarm acknowledgement records. Formats 1 and 2 remain readable: absent event context and acknowledgement records are migrated. Older apps cannot be assumed to read new archives. The same envelope header is retained; its authenticated payload carries the logical format version.
 
 Current bounds are 16 MiB of logical backup content and 24 MiB of file data. This is a manual download/upload feature, not a Hyper Backup package adapter or periodic backup service. A downloaded file can be stored as an ordinary file in a backed-up share. DSM users, DSM passwords, NAS configuration and browser language preferences are not included.
 
@@ -24,7 +24,7 @@ Select a file, enter its password and choose **Check file and password**. Inspec
 
 Restore replaces devices, settings, alarms and events. Existing audit records are retained and merged with archive audit records, subject to the 10,000-entry audit retention limit. Wrong passwords, damaged archives, invalid records or a configuration-change conflict do not partially replace the database. No imported SQL is executed and no file paths are imported.
 
-After restore, all devices are paused, automatic email/desktop delivery is disabled, the desktop recipient must be saved again, and old pending deliveries are cancelled. Stale poll results and editor revisions are rejected. Review current alarms, credentials and channel settings before deliberately re-enabling monitoring/delivery. Enabling a channel does not replay old events.
+After restore, imported alarm acknowledgements retain their attribution and reason but require explicit review and re-acknowledgement before suppression becomes active. All devices are paused, automatic email/desktop delivery is disabled, the desktop recipient must be saved again, and old pending deliveries are cancelled. Stale poll results and editor revisions are rejected. Review current alarms, credentials and channel settings before deliberately re-enabling monitoring/delivery. Enabling a channel does not replay old events.
 
 ## Local upgrade backup
 

@@ -8,13 +8,14 @@ Due to thirdparty package limitations imposed by Synology, this package does not
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current build: 0.8.0-0027.** The Package Center title is **Hardware Monitor**.
+**Current build: 0.8.0-0030.** The Package Center title is **Hardware Monitor**.
 
 ## Features
 
 - A lightweight Rust/Tokio background service, SQLite persistence and a Vue application inside the DSM 7 desktop. No Task Scheduler or loose polling scripts.
 - Read-only Redfish polling with capability discovery, standard/selected OEM storage links, power supplies, fans, temperatures, hardware logs and reachability.
 - Persistent faults, confirmed recoveries, optional reminders, deduplication and grouping of linked summary alarms without merging independent component faults.
+- Acknowledge known hardware faults with a reason: blue status, persistent suppression for email/desktop, automatic summary assessment and reactivation on recovery or worsening. [Acknowledgement rules](docs/ALARM-ACKNOWLEDGEMENT.md).
 - Independently configured SMTP email and native DSM desktop notifications, event filters and per-device delivery enablement. Editable templates, local timestamps and test actions.
 - Filtered full-history CSV, audited event clearing and password-encrypted backup/restore, including device/SMTP credentials. Restore pauses monitoring/delivery and cancels old pending jobs.
 - **German and English:** Automatic/Deutsch/English interface selection, separate saved languages for background channels, localized new event text/API messages/CSV headings and English documentation. Custom templates, vendor text and legacy event text are preserved.

@@ -73,6 +73,7 @@ impl Store {
           CREATE TRIGGER IF NOT EXISTS audit_retention AFTER INSERT ON audit_log BEGIN
             DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 10000);
           END;")?;
+        crate::acknowledgement::initialize(&conn)?;
         Ok(Self(conn))
     }
 
@@ -291,6 +292,10 @@ impl Store {
         let previous_snapshot: Option<Snapshot> = previous_raw
             .map(|raw| serde_json::from_str(&raw))
             .transpose()?;
+        let acknowledged_before =
+            crate::acknowledgement::evaluate(&tx, &d.id, previous_snapshot.as_ref())?
+                .acknowledged();
+        crate::acknowledgement::signatures(&tx, &d.id, snapshot, now)?;
         let mut q = tx.prepare("SELECT key,health FROM alarm_state WHERE device=?1")?;
         let previous = q
             .query_map([&d.id], |r| {
@@ -429,6 +434,8 @@ impl Store {
                 group_notifications(&tx, &d.id, parent, anchors, boundary)?;
             }
         }
+        crate::acknowledgement::signatures(&tx, &d.id, snapshot, now)?;
+        crate::acknowledgement::suppress(&tx, &d.id, snapshot, boundary, &acknowledged_before)?;
         let mut snapshot = snapshot.clone();
         snapshot.notification_groups = groups;
         let initialized: bool = tx.query_row(
@@ -557,11 +564,12 @@ impl Store {
             let mut alarms = q.query_map([&d.id], |r| Ok(json!({"key":r.get::<_,String>(0)?,"health":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(Value::Null),"label":r.get::<_,String>(2)?,"observed":r.get::<_,i64>(3)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let parsed: Option<Snapshot> =
                 raw.as_ref().map(|s| serde_json::from_str(s)).transpose()?;
+            let evaluation = crate::acknowledgement::evaluate(&self.0, &d.id, parsed.as_ref())?;
             for alarm in &mut alarms {
-                let key = alarm["key"].as_str().unwrap();
+                let key = alarm["key"].as_str().unwrap().to_owned();
                 let covered = parsed
                     .as_ref()
-                    .and_then(|s| s.notification_groups.get(key))
+                    .and_then(|s| s.notification_groups.get(&key))
                     .cloned()
                     .unwrap_or_default();
                 let current = parsed
@@ -571,8 +579,19 @@ impl Store {
                     .unwrap_or(Health::Unknown);
                 alarm["covered_by"] = json!(covered);
                 alarm["current_health"] = json!(current);
+                if let Some(status) = evaluation.statuses.get(&key) {
+                    alarm["assessment"] = json!(status);
+                }
             }
-            devices.push(json!({"device":d,"revision":revision,"last_poll":last_poll,"poll_timeout_seconds":d.poll_timeout_seconds(),"stale":!d.enabled || last_poll.is_none_or(|p| crate::now()-p > d.stale_after_seconds() as i64),"snapshot":parsed,"alarms":alarms}));
+            let stale = !d.enabled
+                || last_poll.is_none_or(|p| crate::now() - p > d.stale_after_seconds() as i64);
+            let overall_status = evaluation.overall(parsed.as_ref(), stale);
+            let acknowledged_count = evaluation
+                .statuses
+                .values()
+                .filter(|s| s.acknowledged)
+                .count();
+            devices.push(json!({"device":d,"revision":revision,"last_poll":last_poll,"poll_timeout_seconds":d.poll_timeout_seconds(),"stale":stale,"snapshot":parsed,"alarms":alarms,"overall_status":overall_status,"alarm_statuses":evaluation.statuses,"acknowledged_count":acknowledged_count}));
         }
         let events = self.event_entries(100)?;
         Ok(
@@ -784,7 +803,7 @@ fn group_notifications(
     Ok(())
 }
 
-fn event(
+pub(crate) fn event(
     tx: &Transaction<'_>,
     d: &Device,
     key: &str,
@@ -872,7 +891,14 @@ fn event(
         .transpose()?
         .unwrap_or_default();
     let selected = policy.selection.accepts(key, kind, health);
-    let gate = if !d.alerts_enabled {
+    let acknowledged: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM alarm_control WHERE device=?1 AND key=?2 AND acknowledged=1)",
+        params![d.id, key],
+        |r| r.get(0),
+    )?;
+    let gate = if acknowledged && kind != "hardware_log" {
+        Some("acknowledged")
+    } else if !d.alerts_enabled {
         Some("device_disabled")
     } else if !d.enabled {
         Some("monitoring_disabled")
@@ -964,6 +990,8 @@ fn merge_alarm_alias(
         merged.3 = old.3.into_iter().chain(current.3).max();
     }
     tx.execute("INSERT INTO alarm_state(device,key,health,label,observed,emitted) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(device,key) DO UPDATE SET health=excluded.health,label=excluded.label,observed=excluded.observed,emitted=excluded.emitted",params![device,canonical,merged.0,merged.1,merged.2,merged.3])?;
+    tx.execute("INSERT OR IGNORE INTO alarm_control(device,key,token,acknowledged,actor,acknowledged_at,reason,signature,reannounce) SELECT device,?3,token,acknowledged,actor,acknowledged_at,reason,signature,reannounce FROM alarm_control WHERE device=?1 AND key=?2",params![device,alias,canonical])?;
+    tx.execute("UPDATE alarm_control SET token=lower(hex(randomblob(16))),acknowledged=0,actor=NULL,acknowledged_at=NULL,reason=NULL WHERE device=?1 AND key=?3 AND EXISTS(SELECT 1 FROM alarm_control c JOIN alarm_state a ON a.device=c.device AND a.key=c.key WHERE c.device=?1 AND c.key=?2 AND c.acknowledged=0 AND a.health!='\"ok\"')",params![device,alias,canonical])?;
     tx.execute(
         "DELETE FROM alarm_state WHERE device=?1 AND key=?2",
         params![device, alias],
@@ -994,7 +1022,9 @@ fn apply_observation(tx: &Transaction<'_>, d: &Device, o: &Observation, now: i64
         && d.repeat_seconds
             .zip(last)
             .is_some_and(|(interval, t)| now - t >= interval);
-    let emit = (changed && (o.health != Health::Ok || before.is_some())) || repeating;
+    tx.execute("INSERT INTO alarm_state(device,key,health,label,observed,emitted) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(device,key) DO UPDATE SET health=excluded.health,label=excluded.label,observed=excluded.observed",params![d.id,o.key,serde_json::to_string(&o.health)?,o.label,now,last])?;
+    let reannounce = crate::acknowledgement::transition(tx, d, o, before, now)?;
+    let emit = (changed && (o.health != Health::Ok || before.is_some())) || repeating || reannounce;
     if emit {
         event(
             tx,
@@ -1012,7 +1042,10 @@ fn apply_observation(tx: &Transaction<'_>, d: &Device, o: &Observation, now: i64
             now,
         )?;
     }
-    tx.execute("INSERT INTO alarm_state VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(device,key) DO UPDATE SET health=excluded.health,label=excluded.label,observed=excluded.observed,emitted=excluded.emitted", params![d.id,o.key,serde_json::to_string(&o.health)?,o.label,now,if emit {Some(now)} else {last}])?;
+    tx.execute(
+        "UPDATE alarm_state SET emitted=?3 WHERE device=?1 AND key=?2",
+        params![d.id, o.key, if emit { Some(now) } else { last }],
+    )?;
     Ok(())
 }
 

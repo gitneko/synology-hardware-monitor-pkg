@@ -2,7 +2,7 @@
 //! observation and must never clear an earlier component fault.
 use crate::model::{AssessmentExclusion, Health, Observation};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 struct Facts {
@@ -15,6 +15,7 @@ struct Facts {
     empty_simple: bool,
     populated: bool,
     empty_collection: bool,
+    members: BTreeSet<String>,
     storage: Option<Storage>,
 }
 
@@ -23,6 +24,7 @@ struct Storage {
     volumes: Option<String>,
     empty_volumes: bool,
     controllers: Vec<String>,
+    controller_collection: Option<String>,
 }
 
 #[derive(Default)]
@@ -39,6 +41,13 @@ fn empty_array(value: &Value, name: &str) -> bool {
             .unwrap_or(0)
             == 0
         && value.get(format!("{name}@odata.nextLink")).is_none()
+}
+
+fn child_key(parent: &str, name: &str, item: &Value, index: usize) -> String {
+    item.get("@odata.id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::correlation::embedded_uri(parent, name, item, index))
 }
 
 impl Applicability {
@@ -89,8 +98,24 @@ impl Applicability {
                         .and_then(Value::as_u64)
                         .is_some_and(|n| n > 0)
             });
+        // Standalone controllers can also advertise attached inventory in Links.
+        facts.populated |= ["Drives", "Volumes"].iter().any(|name| {
+            value
+                .get("Links")
+                .and_then(|links| links.get(*name))
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        });
         facts.empty_simple |= kind == "SimpleStorage" && empty_array(value, "Devices");
         facts.empty_collection |= empty_array(value, "Members");
+        if let Some(members) = value.get("Members").and_then(Value::as_array) {
+            facts.members.extend(
+                members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| child_key(key, "Members", member, index)),
+            );
+        }
         if kind == "Storage" {
             facts.storage = Some(Storage {
                 empty_drives: empty_array(value, "Drives"),
@@ -104,12 +129,13 @@ impl Applicability {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(|v| {
-                        v.get("@odata.id")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
+                    .enumerate()
+                    .map(|(index, item)| child_key(key, "StorageControllers", item, index))
                     .collect(),
+                controller_collection: value
+                    .pointer("/Controllers/@odata.id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             });
         }
         for name in crate::collector::LINK_KEYS.iter().chain(["Members"].iter()) {
@@ -129,43 +155,57 @@ impl Applicability {
         observations: &BTreeMap<String, Observation>,
     ) -> BTreeMap<String, AssessmentExclusion> {
         let mut excluded = BTreeMap::new();
+        let mut controllers = BTreeMap::new();
         for (key, facts) in &self.0 {
             if facts.disabled && !facts.other_state {
                 excluded.insert(key.clone(), AssessmentExclusion::Disabled);
             } else if facts.informational && !facts.has_status {
                 excluded.insert(key.clone(), AssessmentExclusion::Informational);
             }
-            if facts.populated || facts.unavailable {
-                continue;
-            }
-            let empty_storage = facts.storage.as_ref().is_some_and(|storage| {
-                storage.empty_drives
-                    && (storage.empty_volumes
-                        || storage
-                            .volumes
-                            .as_ref()
-                            .and_then(|uri| self.0.get(uri))
-                            .is_some_and(|v| v.empty_collection && !v.populated))
-            });
-            if facts.empty_simple || empty_storage {
+            let empty_storage = !facts.populated
+                && !facts.unavailable
+                && facts.storage.as_ref().is_some_and(|storage| {
+                    storage.empty_drives
+                        && (storage.empty_volumes
+                            || storage
+                                .volumes
+                                .as_ref()
+                                .and_then(|uri| self.0.get(uri))
+                                .is_some_and(|v| v.empty_collection && !v.populated))
+                });
+            if !facts.populated && !facts.unavailable && (facts.empty_simple || empty_storage) {
                 excluded
                     .entry(key.clone())
                     .or_insert(AssessmentExclusion::EmptyController);
             }
-            if empty_storage {
+            if let Some(storage) = &facts.storage {
                 // Only explicit Redfish references associate standalone controller
                 // resources with their storage inventory; never names/path guesses.
-                for controller in &facts.storage.as_ref().unwrap().controllers {
-                    if self
-                        .0
-                        .get(controller)
-                        .is_some_and(|v| !v.populated && !v.unavailable)
-                    {
-                        excluded
-                            .entry(controller.clone())
-                            .or_insert(AssessmentExclusion::EmptyController);
-                    }
+                // A shared controller is neutral only if every known owner is empty.
+                let members = storage
+                    .controller_collection
+                    .as_ref()
+                    .and_then(|uri| self.0.get(uri))
+                    .into_iter()
+                    .flat_map(|collection| &collection.members);
+                for controller in storage.controllers.iter().chain(members) {
+                    controllers
+                        .entry(controller.clone())
+                        .and_modify(|empty| *empty &= empty_storage)
+                        .or_insert(empty_storage);
                 }
+            }
+        }
+        for (controller, empty) in controllers {
+            if empty
+                && self
+                    .0
+                    .get(&controller)
+                    .is_some_and(|v| !v.populated && !v.unavailable)
+            {
+                excluded
+                    .entry(controller)
+                    .or_insert(AssessmentExclusion::EmptyController);
             }
         }
         excluded.retain(|key, _| {
@@ -241,6 +281,150 @@ mod tests {
         assert_eq!(a.exclusions(&obs).len(), 2); // Dell aliases must retain Storage references.
         a.observe("controller", &json!({"Devices":[{"Name":"Disk"}]}));
         assert_eq!(a.exclusions(&obs).len(), 1);
+    }
+
+    #[test]
+    fn empty_idrac_storage_explains_all_four_representations_and_overall_health() {
+        let storage = "/redfish/v1/Systems/System.Embedded.1/Storage/RAID.Embedded.1-1";
+        let controller = format!("{storage}/Controllers/RAID.Embedded.1-1");
+        let resources = [
+            json!({"@odata.id":"/redfish/v1/Systems/System.Embedded.1/SimpleStorage/RAID.Embedded.1-1",
+                "@odata.type":"#SimpleStorage.v1_2_0.SimpleStorage","Name":"PERC S140 Controller",
+                "Devices":[],"Status":{"State":"Enabled","Health":null}}),
+            json!({"@odata.id":storage,"@odata.type":"#Storage.v1_14_0.Storage",
+                "Name":"PERC S140 Controller","Status":{"State":"Enabled","Health":null},
+                "Drives":[],"Volumes":{"@odata.id":format!("{storage}/Volumes")},
+                "Controllers":{"@odata.id":format!("{storage}/Controllers")},
+                "StorageControllers":[{"@odata.id":format!("{storage}#/StorageControllers/0"),
+                    "Name":"PERC S140 Controller","Status":{"State":"Enabled","Health":null}}]}),
+            json!({"@odata.id":format!("{storage}/Volumes"),"Members":[],"Members@odata.count":0}),
+            json!({"@odata.id":format!("{storage}/Controllers"),
+                "Members":[{"@odata.id":controller}],"Members@odata.count":1}),
+            json!({"@odata.id":controller,"@odata.type":"#StorageController.v1_6_0.StorageController",
+                "Name":"PERC S140 Controller","Status":{"State":"Enabled","Health":null}}),
+            json!({"@odata.id":"/redfish/v1/Systems/System.Embedded.1/Storage/RAID.Integrated.1-1",
+                "@odata.type":"#Storage.v1_14_0.Storage","Name":"PERC H330 Adapter","Status":{"Health":"OK"},
+                "Drives":[{"@odata.id":"disk"}]}),
+        ];
+        let mut a = Applicability::default();
+        let mut obs = BTreeMap::new();
+        for resource in resources.iter().rev() {
+            a.observe("unused", resource);
+            crate::collector::normalize("unused", resource, &mut obs, &mut Vec::new());
+        }
+        assert_eq!(obs.len(), 5);
+        let mut snapshot = crate::model::Snapshot {
+            observations: obs.values().cloned().collect(),
+            ..Default::default()
+        };
+        let evaluation = crate::acknowledgement::Evaluation {
+            statuses: BTreeMap::new(),
+        };
+        assert_eq!(evaluation.overall(Some(&snapshot), false), "unknown");
+        snapshot.assessment_exclusions = a.exclusions(&obs);
+        assert_eq!(snapshot.assessment_exclusions.len(), 4);
+        assert_eq!(
+            snapshot.assessment_exclusions[&controller],
+            AssessmentExclusion::EmptyController
+        );
+        assert_eq!(evaluation.overall(Some(&snapshot), false), "ok");
+    }
+
+    #[test]
+    fn controller_collection_exemptions_require_safe_inventory_and_explicit_membership() {
+        for (controller_value, expected) in [
+            (json!({"Status":{"State":"Enabled","Health":null}}), true),
+            (json!({"Status":{"State":"UnavailableOffline"}}), false),
+            (json!({"Status":{"Health":"Warning"}}), false),
+            (json!({"Status":{"Health":"Critical"}}), false),
+            (json!({"Links":{"Volumes":[{"@odata.id":"volume"}]}}), false),
+            (json!({"Links":{"Drives":[{"@odata.id":"disk"}]}}), false),
+        ] {
+            let mut a = Applicability::default();
+            a.observe(
+                "storage",
+                &json!({"@odata.type":"#Storage.v1_14_0.Storage","Drives":[],"Volumes":[],
+                "Controllers":{"@odata.id":"controllers"}}),
+            );
+            a.observe("controller", &controller_value);
+            let obs = observations(&[
+                ("controller", Health::Unknown),
+                ("unrelated", Health::Unknown),
+            ]);
+            assert!(a.exclusions(&obs).is_empty()); // A collection link alone is insufficient.
+            a.observe(
+                "controllers",
+                &json!({"Members":[{"@odata.id":"controller"}]}),
+            );
+            assert_eq!(
+                a.exclusions(&obs).contains_key("controller"),
+                expected,
+                "{controller_value}"
+            );
+            assert!(!a.exclusions(&obs).contains_key("unrelated"));
+        }
+        for inventory in [
+            json!({"Drives":[]}),
+            json!({"Drives":[],"Volumes":{"@odata.id":"missing"}}),
+            json!({"Drives":[{}],"Volumes":[]}),
+            json!({"Drives":[],"Volumes":[],"Drives@odata.count":1}),
+            json!({"Drives":[],"Volumes":[],"Volumes@odata.nextLink":"next"}),
+        ] {
+            let mut a = Applicability::default();
+            let mut storage = inventory;
+            storage["@odata.type"] = json!("#Storage.v1_14_0.Storage");
+            storage["Controllers"] = json!({"@odata.id":"controllers"});
+            a.observe("storage", &storage);
+            a.observe(
+                "controllers",
+                &json!({"Members":[{"@odata.id":"controller"}]}),
+            );
+            a.observe("controller", &json!({"Status":{"Health":null}}));
+            assert!(a
+                .exclusions(&observations(&[("controller", Health::Unknown)]))
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn shared_controller_with_populated_storage_cannot_be_excluded() {
+        let mut a = Applicability::default();
+        a.observe(
+            "empty",
+            &json!({"@odata.type":"#Storage.v1_14_0.Storage","Drives":[],"Volumes":[],
+            "Controllers":{"@odata.id":"controllers"}}),
+        );
+        a.observe(
+            "used",
+            &json!({"@odata.type":"#Storage.v1_14_0.Storage","Drives":[{}],"Volumes":[],
+            "Controllers":{"@odata.id":"controllers"}}),
+        );
+        a.observe(
+            "controllers",
+            &json!({"Members":[{"@odata.id":"controller"}]}),
+        );
+        a.observe("controller", &json!({"Status":{"Health":null}}));
+        assert!(a
+            .exclusions(&observations(&[("controller", Health::Unknown)]))
+            .is_empty());
+    }
+
+    #[test]
+    fn embedded_controller_without_odata_id_uses_the_observation_key() {
+        let mut a = Applicability::default();
+        a.observe(
+            "storage",
+            &json!({"@odata.type":"#Storage.v1_4_0.Storage","Drives":[],"Volumes":[],
+            "StorageControllers":[{"MemberId":"0","Status":{"Health":null}}]}),
+        );
+        assert_eq!(
+            a.exclusions(&observations(&[(
+                "storage#StorageControllers:0",
+                Health::Unknown
+            )]))
+            .get("storage#StorageControllers:0"),
+            Some(&AssessmentExclusion::EmptyController)
+        );
     }
 
     #[test]

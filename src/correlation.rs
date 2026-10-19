@@ -14,6 +14,8 @@ pub struct Resource {
     pub independent_condition: bool,
     #[serde(default)]
     pub condition_origins: BTreeSet<String>,
+    #[serde(default)]
+    pub condition_fingerprint: String,
 }
 fn health(v: Option<&Value>) -> Option<Health> {
     match v.and_then(Value::as_str) {
@@ -145,6 +147,28 @@ pub fn observe(fallback: &str, value: &Value, resources: &mut BTreeMap<String, R
                     .is_none_or(|origin| origin == key || !valid(origin))
             });
     }
+    // Ignore timestamps and human-readable messages: only stable fault/identity data
+    // distinguishes a new cause at the same resource and severity.
+    let mut conditions: Vec<String> = value
+        .pointer("/Status/Conditions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|c| c.get("Severity").and_then(Value::as_str) != Some("OK"))
+        .map(|c| {
+            serde_json::json!([
+                c.get("MessageId"),
+                c.get("MessageArgs"),
+                c.pointer("/OriginOfCondition/@odata.id"),
+                c.get("Severity")
+            ])
+            .to_string()
+        })
+        .collect();
+    conditions.sort();
+    conditions.dedup();
+    node.condition_fingerprint =
+        serde_json::json!([value.get("UUID"), value.get("SerialNumber"), conditions]).to_string();
     resources
         .entry(key.into())
         .and_modify(|old| {
@@ -155,11 +179,12 @@ pub fn observe(fallback: &str, value: &Value, resources: &mut BTreeMap<String, R
                 old.rollup = node.rollup;
                 old.independent_condition = node.independent_condition;
                 old.condition_origins = node.condition_origins.clone();
+                old.condition_fingerprint = node.condition_fingerprint.clone();
             }
         })
         .or_insert(node);
 }
-fn aggregate(resource: &Resource) -> bool {
+pub(crate) fn summary(resource: &Resource) -> bool {
     [
         "ComputerSystem",
         "Chassis",
@@ -171,6 +196,9 @@ fn aggregate(resource: &Resource) -> bool {
     ]
     .iter()
     .any(|kind| resource.kind.rsplit('.').next() == Some(*kind))
+}
+fn aggregate(resource: &Resource) -> bool {
+    summary(resource)
         && !resource.independent_condition
         && !matches!(
             (resource.own_health, resource.rollup),
@@ -178,7 +206,7 @@ fn aggregate(resource: &Resource) -> bool {
                 | (Some(Health::Warning), Some(Health::Ok))
         )
 }
-fn descendants(start: &str, resources: &BTreeMap<String, Resource>) -> BTreeSet<String> {
+pub(crate) fn descendants(start: &str, resources: &BTreeMap<String, Resource>) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     let mut queue = vec![start.to_owned()];
     while let Some(key) = queue.pop() {

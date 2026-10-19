@@ -26,3 +26,5 @@ pub mod archive;
 pub mod history;
 
 pub mod i18n;
+
+pub mod acknowledgement;

@@ -1,5 +1,5 @@
 package="HardwareMonitor"
-version="0.8.0-0027"
+version="0.8.0-0030"
 displayname="Hardware Monitor"
 description="Hardware monitoring with configurable SMTP email, encrypted backup/restore, CSV export, event filters and independent DSM desktop notifications."
 maintainer="Hardware Monitor contributors"

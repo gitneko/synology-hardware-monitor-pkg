@@ -43,5 +43,5 @@ test('old snapshots, unknown exemption codes and exclusively informational data 
 
 test('retained component fault stays visible while linked summary states remain inspectable',()=>{
  const d={alarms:[{key:'ps1',label:'PS1',health:'critical',current_health:'unknown',covered_by:[]},{key:'system',label:'System',health:'critical',covered_by:['ps1']}]};
- assert.deepEqual(primaryAlarms(d).map(a=>a.key),['ps1']);assert.deepEqual(summaryAlarms(d).map(a=>a.key),['system']);assert.equal(coveredLabels(d.alarms[1],d),'PS1');assert.match(alarmConfirmation(d.alarms[0]),/aktuell nicht bewertbar/);assert.equal(alarmConfirmation({current_health:'critical'}),'Aktuell bestätigt');
+ assert.deepEqual(primaryAlarms(d).map(a=>a.key),['ps1']);assert.deepEqual(summaryAlarms(d).map(a=>a.key),['system']);assert.equal(coveredLabels(d.alarms[1],d),'PS1');assert.match(alarmConfirmation(d.alarms[0]),/aktuell nicht bewertbar/);assert.equal(alarmConfirmation({current_health:'critical'}),'Aktuell gemessen');
 });

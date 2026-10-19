@@ -22,6 +22,7 @@ const TABLES: &[(&str,&str)]=&[
     ("counters","name,value"),
     ("devices","id,config,secret,last_poll,snapshot,logs_initialized,revision"),
     ("alarm_state","device,key,health,label,observed,emitted"),
+    ("alarm_control","device,key,token,acknowledged,actor,acknowledged_at,reason,signature,reannounce"),
     ("events","id,device,key,kind,health,message,created,device_name,source_created,canonical_key,mail_reason,desktop_reason,correlated_keys,message_context"),
     ("hardware_logs","device,fingerprint,data"),
     ("mail_settings","id,config,secret,revision"),
@@ -143,8 +144,17 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
             }
             archive.format = 2;
         }
+        if archive.format == 2 {
+            anyhow::ensure!(
+                archive.tables.len() == TABLES.len() - 1
+                    && !archive.tables.contains_key("alarm_control"),
+                "legacy tables"
+            );
+            archive.tables.insert("alarm_control".into(), Vec::new());
+            archive.format = 3;
+        }
         anyhow::ensure!(
-            archive.format == 2 && archive.tables.len() == TABLES.len(),
+            archive.format == 3 && archive.tables.len() == TABLES.len(),
             "version/tables"
         );
         for (table, columns) in TABLES {
@@ -230,7 +240,7 @@ impl Store {
         }
         tx.commit()?;
         Ok(Archive {
-            format: 2,
+            format: 3,
             version: env!("CARGO_PKG_VERSION").into(),
             created: crate::now(),
             tables,
@@ -276,6 +286,7 @@ impl Store {
             "mail_recipient",
             "desktop_jobs",
             "outbox",
+            "alarm_control",
             "alarm_state",
             "hardware_logs",
             "events",
@@ -322,6 +333,53 @@ impl Store {
                 }
             }
         }
+        // Imported acknowledgements require an explicit operator review on this installation.
+        // Preserve attribution/reason, but never activate old suppression automatically.
+        {
+            let mut q = tx.prepare("SELECT token,acknowledged,actor,acknowledged_at,reason,signature,reannounce FROM alarm_control")?;
+            let rows = q.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, i64>(6)?,
+                ))
+            })?;
+            for row in rows {
+                let (token, ack, actor, at, reason, signature, reannounce) = row?;
+                anyhow::ensure!(
+                    token.len() == 32
+                        && token.bytes().all(|c| c.is_ascii_hexdigit())
+                        && matches!(ack, 0 | 1)
+                        && matches!(reannounce, 0 | 1),
+                    "alarm control"
+                );
+                anyhow::ensure!(
+                    reason.as_ref().is_none_or(|s| !s.trim().is_empty()
+                        && s.len() <= 1000
+                        && !s.chars().any(char::is_control))
+                        && actor.as_ref().is_none_or(|s| !s.is_empty()
+                            && s.len() <= 1024
+                            && !s.chars().any(char::is_control)),
+                    "acknowledgement metadata"
+                );
+                anyhow::ensure!(
+                    ack == 0 || (actor.is_some() && at.is_some() && reason.is_some()),
+                    "acknowledgement attribution"
+                );
+                if !signature.is_empty() {
+                    serde_json::from_str::<serde_json::Value>(&signature)?;
+                }
+            }
+        }
+        tx.execute(
+            "UPDATE alarm_control SET token=lower(hex(randomblob(16))),acknowledged=0,reannounce=0",
+            [],
+        )?;
+        crate::acknowledgement::initialize(&tx)?;
         // Preserve event identifiers across replacement and subsequent log clearing.
         tx.execute("INSERT INTO counters(name,value) SELECT 'events',MAX(?1,COALESCE(MAX(id),0),COALESCE((SELECT value FROM counters WHERE name='events'),0)) FROM events WHERE true ON CONFLICT(name) DO UPDATE SET value=excluded.value",[event_floor])?;
         {
@@ -483,6 +541,88 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn acknowledged_faults_roundtrip_but_require_review_and_old_format_two_still_imports() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let v1 = Vault::open(&source.path().join("master.key")).unwrap();
+        let v2 = Vault::open(&target.path().join("master.key")).unwrap();
+        let mut s = Store::open(source.path()).unwrap();
+        let d = device();
+        let now = crate::now();
+        s.put(&d, &v1.seal(&d.id, b"synthetic-device-secret").unwrap())
+            .unwrap();
+        s.apply(
+            &d,
+            &crate::model::Snapshot {
+                observations: vec![crate::model::Observation {
+                    key: "fan".into(),
+                    label: "Fan".into(),
+                    health: crate::model::Health::Critical,
+                    reading: None,
+                    unit: None,
+                }],
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+        let token = s.dashboard().unwrap()["devices"][0]["alarm_statuses"]["fan"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        s.acknowledge_alarm(
+            &d.id,
+            1,
+            "fan",
+            &token,
+            true,
+            "Known damaged input",
+            "source-admin",
+            now,
+        )
+        .unwrap();
+        let archive = s.make_archive(&v1).unwrap();
+        let decoded = decrypt(
+            &encrypt(&archive, "synthetic-backup-password").unwrap(),
+            "synthetic-backup-password",
+        )
+        .unwrap();
+        let mut t = Store::open(target.path()).unwrap();
+        t.restore_archive(&decoded, &v2, "target-admin", 0).unwrap();
+        let dashboard = t.dashboard().unwrap();
+        let status = &dashboard["devices"][0]["alarm_statuses"]["fan"];
+        assert_eq!(status["status"], "critical");
+        assert_eq!(status["acknowledgement"]["needs_review"], true);
+        assert_eq!(status["acknowledgement"]["reason"], "Known damaged input");
+        assert_ne!(status["token"], token);
+        let mut legacy = s.make_archive(&v1).unwrap();
+        legacy.format = 2;
+        legacy.tables.remove("alarm_control");
+        let decoded = decrypt(
+            &encrypt(&legacy, "synthetic-backup-password").unwrap(),
+            "synthetic-backup-password",
+        )
+        .unwrap();
+        assert_eq!(decoded.format, 3);
+        assert!(decoded.tables["alarm_control"].is_empty());
+        let cursor = t.audit_cursor().unwrap();
+        t.restore_archive(&decoded, &v2, "target-admin", cursor)
+            .unwrap();
+        assert!(
+            t.dashboard().unwrap()["devices"][0]["alarm_statuses"]["fan"]["acknowledgement"]
+                .is_null()
+        );
+        // Invalid imported metadata rolls back the entire replacement.
+        let mut invalid = s.make_archive(&v1).unwrap();
+        invalid.tables.get_mut("alarm_control").unwrap()[0][3] = Cell::Integer(2);
+        let cursor = t.audit_cursor().unwrap();
+        assert!(t
+            .restore_archive(&invalid, &v2, "target-admin", cursor)
+            .is_err());
+        assert_eq!(t.audit_cursor().unwrap(), cursor);
+        assert!(!t.get(&d.id).unwrap().unwrap().0.enabled);
+    }
     fn device() -> crate::model::Device {
         crate::model::Device {
             id: "backup-test".into(),
@@ -556,6 +696,7 @@ mod tests {
         assert!(decrypt(&STANDARD.encode(corrupt), "a sufficiently long password").is_err());
         let mut legacy = decrypt(&file, "a sufficiently long password").unwrap();
         legacy.format = 1;
+        legacy.tables.remove("alarm_control");
         for table in ["mail_settings", "notification_settings"] {
             for row in legacy.tables.get_mut(table).unwrap() {
                 if let Cell::Text(raw) = &mut row[1] {
@@ -570,7 +711,7 @@ mod tests {
         }
         let old_file = encrypt(&legacy, "a sufficiently long password").unwrap();
         let decoded = decrypt(&old_file, "a sufficiently long password").unwrap();
-        assert_eq!(decoded.format, 2);
+        assert_eq!(decoded.format, 3);
         assert!(matches!(
             decoded.tables["events"][0].last(),
             Some(Cell::Null)
