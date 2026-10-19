@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+# DSM also calls this hook during upgrades. Missing/unknown selections retain data.
+[ "${SYNOPKG_PKG_STATUS:-}" = UNINSTALL ] || exit 0
+[ "${wizard_delete_data:-}" = true ] || exit 0
+[ "${SYNOPKG_PKGNAME:-}" = HardwareMonitor ] || exit 1
+
+# Keep DSM's directory/link itself. Do not trust a wizard-supplied deletion path.
+conf_dir=/var/packages/HardwareMonitor/etc
+if [ ! -e "$conf_dir" ] && [ ! -L "$conf_dir" ]; then
+    exit 0
+fi
+cd -P "$conf_dir"
+physical_dir=$(pwd -P)
+case "$physical_dir" in
+    /volume[0-9]*/@appconf/HardwareMonitor)
+        volume=${physical_dir#/volume}
+        volume=${volume%%/*}
+        case "$volume" in *[!0-9]*) echo 'Unexpected package configuration path; data retained.' >&2; exit 1 ;; esac
+        ;;
+    /usr/syno/etc/packages/HardwareMonitor) ;;
+    *) echo 'Unexpected package configuration path; data retained.' >&2; exit 1 ;;
+esac
+
+# Includes private state, SQLite sidecars, master key, logs, socket, hidden files
+# and every local upgrade backup. rm removes nested symlinks without following them.
+for entry in ./* ./.[!.]* ./..?*; do
+    if [ -e "$entry" ] || [ -L "$entry" ]; then
+        rm -rf -- "$entry"
+    fi
+done

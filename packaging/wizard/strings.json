@@ -1,0 +1,12 @@
+{
+  "enu": {
+    "title": "Uninstall Hardware Monitor",
+    "description": "By default, all data and settings are kept for reinstallation. Selecting the checkbox permanently deletes devices, saved credentials, settings, events, alarm and audit history, service logs, the encryption key and local upgrade backups. Downloaded backups and CSV exports are kept.",
+    "checkbox": "Delete all Hardware Monitor data and settings"
+  },
+  "ger": {
+    "title": "Hardware Monitor deinstallieren",
+    "description": "Standardmäßig bleiben alle Daten und Einstellungen für eine erneute Installation erhalten. Mit gesetztem Haken werden Geräte, gespeicherte Zugangsdaten, Einstellungen, Ereignisse, Alarm- und Auditverlauf, Dienstprotokolle, der Verschlüsselungsschlüssel und lokale Upgrade-Sicherungen dauerhaft gelöscht. Heruntergeladene Backups und CSV-Exporte bleiben erhalten.",
+    "checkbox": "Alle Daten und Einstellungen von Hardware Monitor löschen"
+  }
+}

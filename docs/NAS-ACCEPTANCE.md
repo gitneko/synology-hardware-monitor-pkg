@@ -25,3 +25,15 @@ Compare running/offline PSU, fan, temperature and storage/RAID readings with iDR
 Earlier R340 GET records showed PS1 Critical/UnavailableOffline with 0 W and a healthy PS2; this established the reported fault, not whether the PSU, supply or cable was the physical cause. A transient Lifecycle-log page returned HTTP 500; later direct-IP and hostname comparisons showed changing collections and successful valid final pages. Those observations did not prove a hostname problem or one permanent pagination defect. See [Live records](LIVE-TEST-R340.md).
 
 Check start/stop/restart/upgrade, logout/session expiry, denied users and viewer roles before wider deployment. Full DSM ACL enforcement, directory services, storage-full behavior and long-running resource use remain open. See [Roadmap](ROADMAP.md).
+
+## Build 0031 optional uninstall cleanup (pending NAS acceptance)
+
+Use a disposable test installation/dataset, with an encrypted app backup downloaded first if its contents need to be retained. No automated agent-side NAS uninstall is part of local validation.
+
+1. Upgrade to build 0031. Verify that existing devices/settings/history and local upgrade backups survive the upgrade.
+2. Open the uninstall wizard in German and English. Verify the checkbox is visible and unchecked, the scope is clear, and uninstall can continue while it remains unchecked. Cancel and reopen; it must start unchecked again.
+3. Uninstall with the checkbox unchecked. Reinstall and confirm the same data and credentials are present.
+4. Uninstall with the checkbox checked. Confirm the package configuration contents, including `private` and every `backup-*` directory, are gone. Downloaded backups/exports and neighboring packages must remain intact. Reinstall and confirm an empty configuration.
+5. Verify both the older JSON wizard on DSM 7.0–7.2.1 and the Vue wizard on DSM 7.2.2 or later. Local simulated rendering does not establish either native wizard's behavior.
+
+See [uninstall behavior and implementation](UNINSTALL.md).

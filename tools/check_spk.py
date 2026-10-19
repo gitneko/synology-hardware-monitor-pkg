@@ -10,6 +10,8 @@ assert architecture, 'Expected an explicit supported architecture in the SPK fil
 with tarfile.open(a.spk) as outer:
     names=set(outer.getnames())
     assert {'INFO','conf/privilege','conf/resource','scripts/start-stop-status','package.tgz','LICENSE','PACKAGE_ICON.PNG'}<=names
+    assert {'scripts/postuninst', 'WIZARD_UIFILES/uninstall_uifile.sh',
+            'WIZARD_UIFILES/uninstall_uifile_enu.sh', 'WIZARD_UIFILES/uninstall_uifile_ger.sh'}<=names
     privilege=json.load(outer.extractfile('conf/privilege'))
     assert privilege=={'defaults':{'run-as':'package'}}
     resource=json.load(outer.extractfile('conf/resource'))
@@ -24,7 +26,7 @@ with tarfile.open(a.spk) as outer:
     info=outer.extractfile('INFO').read().decode(); full_version=re.search(r'^version="([^"]+)"',info,re.M).group(1);version=full_version.split('-')[0];assert f'arch="{architecture}"' in info;assert 'displayname="Hardware Monitor"' in info
     assert 'os_min_ver="7.0-40761"' in info, 'Expected DSM 7 minimum version'
     for member in outer.getmembers():
-        if member.name.startswith('scripts/') and member.isfile():
+        if (member.name.startswith('scripts/') or member.name.startswith('WIZARD_UIFILES/')) and member.isfile():
             assert member.mode&0o111
             subprocess.run(['sh','-n'],input=outer.extractfile(member).read(),check=True)
     with tarfile.open(fileobj=io.BytesIO(outer.extractfile('package.tgz').read()),mode='r:gz') as payload:
@@ -134,5 +136,8 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
                 assert subprocess.run(['sh',str(script),'status'],capture_output=True).returncode!=0
             finally:
                 subprocess.run(['sh',str(script),'stop'],capture_output=True)
-print(f'PASS {profile}: archive structure, privilege/profile separation, native lifecycle execution, syntax/modes, static executable, regular CGI entrypoint denial, DSM route/relative assets/API path and event templates')
+subprocess.run([os.sys.executable, '-m', 'unittest', 'discover', '-s', str(Path(__file__).parent/'tests'),
+                '-p', 'test_uninstall.py', '-v'],
+               env={**os.environ, 'HARDWARE_MONITOR_TEST_SPK': str(a.spk.resolve())}, check=True)
+print(f'PASS {profile}: archive structure, privilege/profile separation, native lifecycle execution, syntax/modes, static executable, regular CGI entrypoint denial, DSM route/relative assets/API path, event templates and optional uninstall cleanup')
 print('SHA256',hashlib.sha256(a.spk.read_bytes()).hexdigest())

@@ -13,6 +13,7 @@ import re
 import json
 import os
 import time
+from uninstall_wizard import write_wizards
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
@@ -78,11 +79,12 @@ with tempfile.TemporaryDirectory() as temp:
     # No user/system units are shipped until the DSM third-party resource contract is confirmed.
     (outer/'scripts').mkdir()
     shutil.copy2(ROOT/f'packaging/scripts/start-stop-status.{a.profile}',outer/'scripts/start-stop-status')
-    for name in ['postinst','preupgrade']:
+    for name in ['postinst','preupgrade','postuninst']:
         shutil.copy2(ROOT/f'packaging/scripts/{name}',outer/'scripts'/name)
-    for name in ['preinst','preuninst','postuninst','postupgrade']:
+    for name in ['preinst','preuninst','postupgrade']:
         (outer/'scripts'/name).write_text('#!/bin/sh\nexit 0\n')
     for script in (outer/'scripts').iterdir():script.chmod(0o755)
+    write_wizards(outer/'WIZARD_UIFILES')
     shutil.copy2(ROOT/'LICENSE',outer/'LICENSE')
     shutil.copy2(ROOT/'packaging/ui/images/icon_64.png',outer/'PACKAGE_ICON.PNG')
     shutil.copy2(ROOT/'packaging/ui/images/icon_256.png',outer/'PACKAGE_ICON_256.PNG')
