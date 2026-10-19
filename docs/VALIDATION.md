@@ -10,6 +10,16 @@ Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 fro
 
 These records apply to the tested systems. Earlier build sections below describe the evidence and outstanding checks at that stage of development; their historical limitations do not replace this current compatibility status. Model/firmware details are maintained in [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 
+## Build 0027 iLO session paths and response diagnostics
+
+Independent testing of an authorized HPE ProLiant DL160 Gen10 / iLO 5 v3.22 established Redfish 1.20.0, successful read-only session login (HTTP 201), and HTTP 200 for Systems, Chassis, Managers and server details. The exact supplied certificate was matched before sending credentials. Standard certificate validation correctly rejected the incomplete issuer chain; its SAN contains the controller DNS name rather than the IP address. No controller configuration was changed.
+
+The original Hardware Monitor pinned probe returned `connection_response_invalid` because the advertised session collection and returned session URL have trailing slashes. That code lacked a specific translated message. Build 0027 accepts a single optional final slash for validation while preserving the exact request path and all existing origin/session-ownership constraints. Invalid-response, response-size and HTTP errors now have specific German/English text. The compatibility-mode label includes iLO without changing the saved profile identifier.
+
+One early regular poll also failed during authentication with a transport error; a subsequent run succeeded. The pinned transport now opens fresh verified connections for authentication writes instead of risking a write on an idle stream. No POST is automatically retried. GET reuse and safe reconnects remain available. Regression fixtures cover servers that reject authentication writes on reused streams, all collection/resource trailing-slash combinations on Standard and pinned transports, correct owned-session logout, mismatched collections, unsafe session IDs and translated diagnostics.
+
+With the final corrected Rust client, the live probe checked all three collections in 1.423 seconds. Two successive full polls completed in 6.582 and 6.573 seconds; each retrieved 42 available resources, 113 observations including coverage records and 421 hardware-log entries, with complete log coverage and no query errors. The controller's hardware states included five Warning and 28 Unknown observations; successful collection does not turn those states into OK. Local test state was temporary and notification delivery disabled. The 67 Rust and 34 frontend tests, formatting and Clippy passed. NAS installation remains to be confirmed.
+
 ## Build 0026 DSM 7 packaging scope
 
 Only the DSM 7 x86_64 SPK remains in the maintained build/release set. The legacy INFO/resource/lifecycle files and launcher configuration are removed. Package assembly rejects the retired profile and checks the DSM 7 minimum version, desktop launcher and icon. Release tests cover the three-file asset set, rejection of a retired package in new assets, and cleanup of previously managed package assets only after a successful replacement upload. These release tests use a fake client; no GitHub assets are changed by local checks. The README and active documentation no longer list the former DS220+ target.
@@ -76,7 +86,7 @@ The English additions, new forced-language desktop keys and backup-format migrat
 
 ## Remaining hardware/operational limits
 
-Dell PowerEdge R420/iDRAC7, R330/iDRAC8 and R340/iDRAC9 have been tested as described above. Live HPE iLO 5 coverage and simultaneous physical fault scenarios remain unverified. Unknown/null/offline data is deliberately not classified as healthy. No complete RAID/OEM coverage, resource budget, prolonged reliability result or production security audit is claimed. See [Roadmap](ROADMAP.md), [NAS acceptance](NAS-ACCEPTANCE.md) and [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
+Dell PowerEdge R420/iDRAC7, R330/iDRAC8 and R340/iDRAC9 have been tested as described above. Read-only HPE DL160 Gen10/iLO 5 v3.22 collection is verified in build 0027. Other HPE model/license combinations and simultaneous physical fault scenarios remain unverified. Unknown/null/offline data is deliberately not classified as healthy. No complete RAID/OEM coverage, resource budget, prolonged reliability result or production security audit is claimed. See [Roadmap](ROADMAP.md), [NAS acceptance](NAS-ACCEPTANCE.md) and [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 
 ## Build 0018 release automation
 

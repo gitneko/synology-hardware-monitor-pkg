@@ -690,6 +690,9 @@ pub fn message(code: &str) -> &'static str {
         "connection_credentials_rejected"=>"Das Gerät hat die Zugangsdaten abgewiesen.",
         "connection_permission_denied"=>"Der Gerätebenutzer darf den Redfish-Dienst nicht lesen.",
         "connection_not_redfish"=>"Unter dieser Adresse wurde kein gültiger Redfish-Dienst gefunden.",
+        "connection_response_invalid"=>"Das Gerät hat eine ungültige oder nicht unterstützte Redfish-Antwort geliefert.",
+        "connection_response_too_large"=>"Die Redfish-Antwort überschreitet das Größenlimit des Verbindungstests.",
+        "connection_http_error"=>"Der Redfish-Dienst hat eine HTTP-Fehlermeldung zurückgegeben.",
         "connection_busy"=>"Es laufen bereits Verbindungsprüfungen. Bitte kurz warten.",
         _=>"Die Anfrage konnte nicht ausgeführt werden. Bitte Anmeldung und Angaben prüfen.",
     }
@@ -697,6 +700,21 @@ pub fn message(code: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connection_response_errors_have_specific_translated_messages() {
+        for code in [
+            "connection_response_invalid",
+            "connection_response_too_large",
+            "connection_http_error",
+        ] {
+            let message = super::message(code);
+            assert_ne!(message, super::message("unknown_error"));
+            assert_ne!(
+                crate::i18n::text(message, crate::i18n::Language::En),
+                message
+            );
+        }
+    }
     use super::*;
     use std::collections::BTreeMap;
     fn auth() -> AuthContext {

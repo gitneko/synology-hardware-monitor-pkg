@@ -20,7 +20,7 @@ VERSION = subprocess.check_output([str(BINARY), "--version"], text=True).strip()
 state = {"storage_failures": 0, "storage_forced_status": 0, "fan_state": "Enabled", "health": "Critical", "storage": True, "log": "old", "redirect": False, "reject": False}
 requests = []
 SESSION_TOKEN = 'synthetic-standard-session-token'
-state.update(sessions=False, session_active=False, session_posts=0, session_deletes=0, session_redirect=False)
+state.update(sessions=False, session_active=False, session_posts=0, session_deletes=0, session_redirect=False, session_collection='/redfish/v1/Sessions', session_location='/redfish/v1/Sessions/owned')
 
 class Mock(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -61,25 +61,25 @@ class Mock(BaseHTTPRequestHandler):
         if self.path not in data:
             self.send_error(404); return
         if state['sessions'] and self.path == '/redfish/v1/root/':
-            data[self.path]['Links'] = {'Sessions': {'@odata.id': '/redfish/v1/Sessions'}}
+            data[self.path]['Links'] = {'Sessions': {'@odata.id': state['session_collection']}}
         payload = json.dumps(data[self.path]).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
     def do_POST(self):
-        assert self.path == '/redfish/v1/Sessions'
+        assert self.path == state['session_collection']
         state['session_posts'] += 1
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert body == {'UserName':'monitor','Password':'integration-secret'}
         self.send_response(307 if state['session_redirect'] else 201)
-        self.send_header('Location','/redfish/v1/Chassis' if state['session_redirect'] else '/redfish/v1/Sessions/owned')
+        self.send_header('Location','/redfish/v1/Chassis' if state['session_redirect'] else state['session_location'])
         self.send_header('X-Auth-Token',SESSION_TOKEN)
         self.send_header('Content-Length','2')
         self.end_headers(); self.wfile.write(b'{}')
         state['session_active'] = not state['session_redirect']
 
     def do_DELETE(self):
-        assert self.path == '/redfish/v1/Sessions/owned'
+        assert self.path == state['session_location']
         assert self.headers.get('X-Auth-Token') == SESSION_TOKEN
         state['session_deletes'] += 1
         state['session_active'] = False
@@ -127,6 +127,15 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         state['sessions'] = True
         run('device-test','--file',str(config_file),password=b'integration-secret\n')
         assert state['session_posts']==state['session_deletes']==1 and not state['session_active']
+        for collection_slash in ['', '/']:
+            for resource_slash in ['', '/']:
+                state['session_collection'] = '/redfish/v1/SessionService/Sessions' + collection_slash
+                state['session_location'] = '/redfish/v1/SessionService/Sessions/owned' + resource_slash
+                before = state['session_deletes']
+                run('device-test','--file',str(config_file),password=b'integration-secret\n')
+                assert state['session_deletes'] == before + 1 and not state['session_active']
+        state['session_collection'] = '/redfish/v1/Sessions'
+        state['session_location'] = '/redfish/v1/Sessions/owned'
         state['session_redirect'] = True
         requests.clear()
         run('device-test','--file',str(config_file),password=b'integration-secret\n',success=False)

@@ -160,11 +160,14 @@ fn sensitive_header(token: &str) -> Result<reqwest::header::HeaderValue> {
 
 pub(crate) fn session_collection_path(path: &str) -> bool {
     matches!(
-        path,
+        path.strip_suffix('/').unwrap_or(path),
         "/redfish/v1/Sessions" | "/redfish/v1/SessionService/Sessions"
     )
 }
 pub(crate) fn session_resource_path(path: &str) -> bool {
+    // iLO advertises both the collection and the created session with a final
+    // slash. Accept one optional slash for validation, preserving the URL sent.
+    let path = path.strip_suffix('/').unwrap_or(path);
     [
         "/redfish/v1/Sessions/",
         "/redfish/v1/SessionService/Sessions/",
@@ -518,7 +521,7 @@ impl Redfish {
             session_resource_path(location.path())
                 && location
                     .path()
-                    .starts_with(&(target.path().to_owned() + "/"))
+                    .starts_with(&(target.path().trim_end_matches('/').to_owned() + "/"))
                 && location.query().is_none(),
             crate::dsm::BoundaryError("connection_response_invalid")
         );
@@ -1041,15 +1044,35 @@ mod tests {
     #[test]
     fn authentication_operations_are_confined_to_session_endpoints() {
         assert!(session_collection_path("/redfish/v1/Sessions"));
+        assert!(session_collection_path("/redfish/v1/Sessions/"));
+        assert!(session_collection_path(
+            "/redfish/v1/SessionService/Sessions/"
+        ));
         assert!(session_resource_path(
             "/redfish/v1/SessionService/Sessions/42-ab"
         ));
+        assert!(session_resource_path(
+            "/redfish/v1/SessionService/Sessions/42-ab/"
+        ));
+        assert!(session_resource_path("/redfish/v1/Sessions/owned/"));
+        for path in [
+            "/redfish/v1/Sessions//",
+            "/redfish/v1/SessionService/Sessions//",
+            "/redfish/v1/Chassis/",
+        ] {
+            assert!(!session_collection_path(path), "{path}");
+        }
         for path in [
             "/redfish/v1/Systems/1",
             "/redfish/v1/Sessions/../Chassis",
             "/redfish/v1/Sessions/%2e%2e",
             "/redfish/v1/Sessions/a%2f..%2fChassis",
             "/redfish/v1/Sessions/",
+            "/redfish/v1/Sessions//",
+            "/redfish/v1/Sessions/owned//",
+            "/redfish/v1/Sessions/owned/child/",
+            "/redfish/v1/SessionService/Sessions/../Chassis/",
+            "/redfish/v1/SessionService/Sessions/%2f/",
         ] {
             assert!(!session_resource_path(path), "{path}");
         }

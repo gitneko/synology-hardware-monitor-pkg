@@ -28,6 +28,7 @@ class Handler(BaseHTTPRequestHandler):
         server = self.server
         server.requests += 1
         server.paths.append(self.path)
+        server.last_get_stream = self.connection
         basic = self.headers.get('Authorization') == AUTH
         token = server.sessions and server.active_session and self.headers.get('X-Auth-Token') == TOKEN
         server.authorized += basic or token
@@ -57,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
             '/redfish/v1/Chassis/R420/Thermal': {'Temperatures': [{'MemberId': 'Inlet', 'Name': 'Inlet', 'ReadingCelsius': 24, 'Status': {'Health': 'OK'}}]},
         }
         if server.sessions:
-            graph['/redfish/v1/']['Links'] = {'Sessions': {'@odata.id': '/redfish/v1/Sessions'}}
+            graph['/redfish/v1/']['Links'] = {'Sessions': {'@odata.id': server.session_collection}}
         log_root = '/redfish/v1/Systems/R420/LogServices'
         entries = log_root + '/LC/Entries'
         if server.mode:
@@ -93,8 +94,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         server = self.server
+        if server.reject_reused_auth and self.connection is server.last_get_stream:
+            server.reused_auth_attempts += 1
+            self.close_connection = True
+            return
         server.session_posts += 1
-        assert self.path == '/redfish/v1/Sessions', 'Only session login may use POST'
+        assert self.path == server.session_collection, 'Only the advertised session collection may receive POST'
         size = int(self.headers['Content-Length'])
         assert size <= 8192
         credentials = json.loads(self.rfile.read(size))
@@ -114,8 +119,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         server = self.server
+        if server.reject_reused_auth and self.connection is server.last_get_stream:
+            server.reused_auth_attempts += 1
+            self.close_connection = True
+            return
         server.session_deletes.append(self.path)
-        assert self.path == '/redfish/v1/Sessions/owned', 'Only the created session may be deleted'
+        assert self.path == server.session_location, 'Only the returned session URL may be deleted'
         assert self.headers.get('X-Auth-Token') == TOKEN
         server.active_session = False
         self.send_response(204)
@@ -174,7 +183,11 @@ with tempfile.TemporaryDirectory() as temporary:
         server.basic_requests = server.token_requests = 0
         server.sessions = server.active_session = False
         server.session_posts = 0
+        server.last_get_stream = None
+        server.reject_reused_auth = False
+        server.reused_auth_attempts = 0
         server.session_status = 201
+        server.session_collection = '/redfish/v1/Sessions'
         server.session_location = '/redfish/v1/Sessions/owned'
         server.session_deletes = []
         server.delay_path = None
@@ -340,6 +353,24 @@ with tempfile.TemporaryDirectory() as temporary:
         assert result['checked_collections'] == 3
         assert session.session_posts == 1 and session.basic_requests == 1 and session.token_requests == 3
         assert session.session_deletes == ['/redfish/v1/Sessions/owned'] and not session.active_session
+        # iLO-style URLs keep their exact optional final slash on both writes.
+        for collection_slash in ['', '/']:
+            for resource_slash in ['', '/']:
+                ilo = start(cert)
+                ilo.graph = ilo.sessions = True
+                ilo.reject_reused_auth = True
+                ilo.session_collection = '/redfish/v1/SessionService/Sessions' + collection_slash
+                ilo.session_location = '/redfish/v1/SessionService/Sessions/owned' + resource_slash
+                result = probe(settings(ilo), True)
+                assert result['checked_collections'] == 3
+                assert ilo.session_posts == 1 and ilo.token_requests == 3
+                assert ilo.session_deletes == [ilo.session_location] and not ilo.active_session
+                assert ilo.reused_auth_attempts == 0
+        # Even another permitted session collection cannot own this login's session.
+        ilo.session_location = '/redfish/v1/Sessions/owned/'
+        ilo.session_deletes.clear()
+        probe(settings(ilo), False, 'connection_response_invalid')
+        assert not ilo.session_deletes
         # Lack of session support keeps the existing Basic-authentication path.
         session.session_status = 403
         session.session_deletes.clear()
@@ -365,6 +396,9 @@ with tempfile.TemporaryDirectory() as temporary:
         # Full monitoring uses one password authentication and cleans up its token.
         full = start(cert)
         full.graph = full.sessions = True
+        full.reject_reused_auth = True
+        full.session_collection = '/redfish/v1/SessionService/Sessions/'
+        full.session_location = '/redfish/v1/SessionService/Sessions/owned/'
         file.write_text(json.dumps(settings(full)))
         for command, secret in [('device-put', SECRET + '\n'), ('poll-once', None), ('snapshot', None)]:
             args = [str(BINARY), '--state', str(root / 'session-poll-state'), command]
@@ -375,7 +409,7 @@ with tempfile.TemporaryDirectory() as temporary:
         snap = json.loads(result.stdout)['devices'][0]['snapshot']
         assert snap['logs_complete'] and all(c['outcome']=='available' for c in snap['capabilities'])
         assert full.basic_requests==1 and full.token_requests==6 and full.session_posts==1
-        assert full.session_deletes==['/redfish/v1/Sessions/owned'] and not full.active_session
+        assert full.session_deletes==[full.session_location] and not full.active_session
     finally:
         for server in servers:
             server.shutdown()

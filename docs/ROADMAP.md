@@ -1,6 +1,6 @@
 # Implementation status and roadmap
 
-Current package build: **0.8.0-0026**, documentation updated on 19 October 2026.
+Current package build: **0.8.0-0027**, documentation updated on 19 October 2026.
 
 ## Implemented
 
@@ -17,9 +17,11 @@ On RS2421RP+ / DSM 7.4.1-90080, the user confirms installation, the internal win
 
 The user also confirms testing of the Dell PowerEdge R420 with iDRAC7 and Dell PowerEdge R330 with iDRAC8. Alongside the R340/iDRAC9 results, these are tested systems rather than merely intended targets. See [Hardware compatibility](HARDWARE-COMPATIBILITY.md) for recorded firmware and evidence.
 
+Authorized testing also verifies the HPE ProLiant DL160 Gen10 with iLO 5 v3.22 using a read-only account: protected Redfish access and complete collector runs with explicit server-certificate pinning. License entitlements and multi-fault behavior were not evaluated.
+
 ## Next necessary work
 
-1. **Hardware matrix:** live iLO 5 3.22 without Advanced and additional model/firmware combinations; storage/controller/drive faults, sensors and firmware/permission differences. A real multi-fault and iLO test has been proposed for the following week but has not occurred yet.
+1. **Hardware matrix:** additional model/firmware combinations and explicit iLO license coverage without Advanced; storage/controller/drive faults, sensors and firmware/permission differences. A real multi-fault and iLO test has been proposed for the following week but has not occurred yet.
 2. **NAS language acceptance:** Automatic detection, explicit English/German, error paths, English CSV, SMTP preview/test and the saved desktop language. Confirm an old build-0016 backup can be restored after upgrading.
 3. **SNMP:** SNMPv3 polling and traps, HPE/Dell profiles/OIDs, secure device association and cross-protocol deduplication. Not implemented.
 4. **DSM permissions/platforms:** full native Application Privileges enforcement and viewer menu access, DSM 7 upgrade/rollback and directory-service behavior.

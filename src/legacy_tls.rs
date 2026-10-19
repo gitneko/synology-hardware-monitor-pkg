@@ -181,7 +181,12 @@ impl PinnedClient {
         let mut slot = self.connection.lock().await;
         // Take ownership before awaiting: cancellation must discard the stream.
         let cached = slot.take().filter(|connection| {
-            connection.origin == url.origin() && !connection.sender.is_closed()
+            // Controllers can silently close an idle stream. Authenticate writes
+            // on a fresh verified connection rather than replaying a POST after
+            // an ambiguous network failure. Hardware GETs still reuse streams.
+            method == hyper::Method::GET
+                && connection.origin == url.origin()
+                && !connection.sender.is_closed()
         });
         let reused = cached.is_some();
         let mut connection = match cached {

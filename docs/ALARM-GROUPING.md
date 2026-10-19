@@ -16,6 +16,6 @@ An unknown retained component can emit a carefully worded reminder only when a f
 
 ## Limits
 
-Relationships and severity do not prove physical causality. A second cause that the BMC never reports individually cannot reliably be inferred from an unchanged critical summary. Missing links, incomplete coverage or stronger/unexplained aggregate conditions retain a separate alarm. Real multi-fault testing and HPE iLO 5 acceptance are still pending.
+Relationships and severity do not prove physical causality. A second cause that the BMC never reports individually cannot reliably be inferred from an unchanged critical summary. Missing links, incomplete coverage or stronger/unexplained aggregate conditions retain a separate alarm. Real multi-fault testing, including HPE iLO 5 fault scenarios, is still pending.
 
 Primary model references: [DMTF Redfish data model](https://redfish.dmtf.org/schemas/v1/DSP0268_2025.3.pdf) and [Resource schema](https://redfish.dmtf.org/schemas/v1/Resource.json). Existing sanitized fixture: `tests/fixtures/dell-r340-hierarchy.json`.

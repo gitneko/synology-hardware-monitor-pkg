@@ -8,7 +8,7 @@ Due to thirdparty package limitations imposed by Synology, this package does not
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current build: 0.8.0-0026.** The Package Center title is **Hardware Monitor**.
+**Current build: 0.8.0-0027.** The Package Center title is **Hardware Monitor**.
 
 ## Features
 
@@ -36,7 +36,7 @@ No universal RAID/OEM or production-reliability claim is made. **SNMP polling/tr
 ## Getting started
 
 1. Download the checked SPK from the release tagged `latest`: `HardwareMonitor-dsm7-x86_64.spk` for DSM 7 (including v1000 and geminilake). Verify it against `SHA256SUMS`, install through Package Center and open Hardware Monitor from DSM. The first release appears after this repository has been pushed to GitHub and its default-branch workflow succeeds.
-2. Add an HTTPS management-controller origin and an account with the required hardware-read permissions. Use a trusted certificate chain/private CA with a matching hostname in Standard mode. For older Dell controllers, explicitly select iDRAC7/8 compatibility and import the exact server certificate from a trusted source; its fingerprint and validity dates are checked before HTTP credentials are sent.
+2. Add an HTTPS management-controller origin and an account with the required hardware-read permissions. Use a trusted certificate chain/private CA with a matching hostname in Standard mode. For older Dell controllers or the tested iLO factory certificate, explicitly select iDRAC7/8 and iLO compatibility and import the exact server certificate from a trusted source; its fingerprint and validity dates are checked before HTTP credentials are sent.
 3. Review current/retained alarms and discovered coverage. Missing or unavailable values do not confirm a healthy state or recovery.
 4. If delivery is wanted, enable the device notification option, configure the channel and select events. Configure background languages independently of the interface. Existing templates are not overwritten by a language switch.
 5. Download an encrypted app backup and retain its password separately. A restore replaces app data, then leaves devices/channels paused for deliberate review and reactivation.
