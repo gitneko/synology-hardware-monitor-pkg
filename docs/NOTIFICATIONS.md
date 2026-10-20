@@ -10,6 +10,8 @@ Each channel has a durable queue. SMTP has separate recipient progress and stabl
 
 Saving channel/filter settings cancels pending jobs for both channels; saving SMTP settings cancels pending email jobs. Pausing, disabling notifications, deleting or retargeting a device cancels affected pending jobs. Already submitted messages cannot be recalled. Enabling delivery never replays all historical events.
 
+These device/filter rules apply to automatic notifications. The separately confirmed [manual email replay](MAIL-REPLAY.md) is independent of them, has its own durable job and history, and sends to one selected saved recipient. SMTP changes, event-log clearing and archive restore also invalidate or cancel relevant manual work.
+
 The event table distinguishes locally stored, filtered, grouped, queued, cancelled, failed and submitted states. SMTP acceptance is not inbox delivery. A native command's zero exit status is not proof of a displayed notification. Historical events are not necessarily current hardware faults; use the current/retained alarm panel for state.
 
 ## Languages and timestamps

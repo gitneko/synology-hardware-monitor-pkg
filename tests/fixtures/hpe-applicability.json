@@ -1,0 +1,790 @@
+{
+  "description": "Sanitized iLO 5 live sensor and empty SATA inventory fields from 20 October 2026. No credentials, device addresses, serial numbers or logs. The two SATA resources omit Volumes and expose each controller in embedded and standalone form.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Chassis/1/Power/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/Power/",
+        "@odata.type": "#Power.v1_3_0.Power",
+        "Id": "Power",
+        "Name": "PowerMetrics",
+        "PowerControl": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerControl/0",
+            "MemberId": "0",
+            "PowerConsumedWatts": 76
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/Thermal/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/Thermal/",
+        "@odata.type": "#Thermal.v1_7_1.Thermal",
+        "Id": "Thermal",
+        "Name": "Thermal",
+        "Fans": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/0",
+            "MemberId": "0",
+            "Name": "Fan 1",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 0,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/1",
+            "MemberId": "1",
+            "Name": "Fan 2",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 0,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/2",
+            "MemberId": "2",
+            "Name": "Fan 3",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 0,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/3",
+            "MemberId": "3",
+            "Name": "Fan 4",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 0,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/4",
+            "MemberId": "4",
+            "Name": "Fan 5",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 19,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/5",
+            "MemberId": "5",
+            "Name": "Fan 6",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 19,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Fans/6",
+            "MemberId": "6",
+            "Name": "Fan 7",
+            "PhysicalContext": "SystemBoard",
+            "Reading": 19,
+            "ReadingUnits": "Percent",
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          }
+        ],
+        "Temperatures": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/0",
+            "MemberId": "0",
+            "Name": "01-Inlet Ambient",
+            "PhysicalContext": "Intake",
+            "ReadingCelsius": 21,
+            "SensorNumber": 1,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/1",
+            "MemberId": "1",
+            "Name": "02-CPU 1",
+            "PhysicalContext": "CPU",
+            "ReadingCelsius": 40,
+            "SensorNumber": 2,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/2",
+            "MemberId": "2",
+            "Name": "03-CPU 2",
+            "PhysicalContext": "CPU",
+            "ReadingCelsius": 0,
+            "SensorNumber": 3,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/3",
+            "MemberId": "3",
+            "Name": "04-P1 DIMM 1-4",
+            "PhysicalContext": "Memory",
+            "ReadingCelsius": 32,
+            "SensorNumber": 4,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/4",
+            "MemberId": "4",
+            "Name": "06-P1 DIMM 5-8",
+            "PhysicalContext": "Memory",
+            "ReadingCelsius": 29,
+            "SensorNumber": 5,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/5",
+            "MemberId": "5",
+            "Name": "08-P2 DIMM 1-4",
+            "PhysicalContext": "Memory",
+            "ReadingCelsius": 0,
+            "SensorNumber": 6,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/6",
+            "MemberId": "6",
+            "Name": "10-P2 DIMM 5-8",
+            "PhysicalContext": "Memory",
+            "ReadingCelsius": 0,
+            "SensorNumber": 7,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/7",
+            "MemberId": "7",
+            "Name": "12-HD Max",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 35,
+            "SensorNumber": 8,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/8",
+            "MemberId": "8",
+            "Name": "13-Chipset",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 63,
+            "SensorNumber": 9,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/9",
+            "MemberId": "9",
+            "Name": "14-Chipset Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 41,
+            "SensorNumber": 10,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/10",
+            "MemberId": "10",
+            "Name": "15-P/S 1 Zone",
+            "PhysicalContext": "PowerSupply",
+            "ReadingCelsius": 29,
+            "SensorNumber": 11,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/11",
+            "MemberId": "11",
+            "Name": "16-HD Cntlr Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 33,
+            "SensorNumber": 12,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/12",
+            "MemberId": "12",
+            "Name": "17-Sys Exhaust 3",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 33,
+            "SensorNumber": 13,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/13",
+            "MemberId": "13",
+            "Name": "18-VR P1",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 31,
+            "SensorNumber": 14,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/14",
+            "MemberId": "14",
+            "Name": "19-VR P2",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 15,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/15",
+            "MemberId": "15",
+            "Name": "20-VR P1 Mem 1",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 29,
+            "SensorNumber": 16,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/16",
+            "MemberId": "16",
+            "Name": "21-VR P1 Mem 2",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 31,
+            "SensorNumber": 17,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/17",
+            "MemberId": "17",
+            "Name": "22-VR P2 Mem 1",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 18,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/18",
+            "MemberId": "18",
+            "Name": "23-VR P2 Mem 2",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 19,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/19",
+            "MemberId": "19",
+            "Name": "24-P/S 1 Inlet",
+            "PhysicalContext": "PowerSupply",
+            "ReadingCelsius": 31,
+            "SensorNumber": 20,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/20",
+            "MemberId": "20",
+            "Name": "25-P/S 1",
+            "PhysicalContext": "PowerSupply",
+            "ReadingCelsius": 40,
+            "SensorNumber": 21,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/21",
+            "MemberId": "21",
+            "Name": "26-P/S 2 Inlet",
+            "PhysicalContext": "PowerSupply",
+            "ReadingCelsius": 33,
+            "SensorNumber": 22,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/22",
+            "MemberId": "22",
+            "Name": "27-P/S 2",
+            "PhysicalContext": "PowerSupply",
+            "ReadingCelsius": 40,
+            "SensorNumber": 23,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/23",
+            "MemberId": "23",
+            "Name": "28-Battery Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 32,
+            "SensorNumber": 24,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/24",
+            "MemberId": "24",
+            "Name": "29-Stor Batt",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 25,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/25",
+            "MemberId": "25",
+            "Name": "30-HD ROC Inlet",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 26,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/26",
+            "MemberId": "26",
+            "Name": "31-HD Controller",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 27,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/27",
+            "MemberId": "27",
+            "Name": "32-PCI 1",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 28,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/28",
+            "MemberId": "28",
+            "Name": "33-PCI 2",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 51,
+            "SensorNumber": 29,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/29",
+            "MemberId": "29",
+            "Name": "34-PCI 3",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 30,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/30",
+            "MemberId": "30",
+            "Name": "35-PCI 1 Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 35,
+            "SensorNumber": 31,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/31",
+            "MemberId": "31",
+            "Name": "36-PCI 2 Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 35,
+            "SensorNumber": 32,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/32",
+            "MemberId": "32",
+            "Name": "37-PCI 3 Zone",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 33,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/33",
+            "MemberId": "33",
+            "Name": "40-mLOM 3",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 34,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/34",
+            "MemberId": "34",
+            "Name": "41-mLOM 3 Bd Zn",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 35,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/35",
+            "MemberId": "35",
+            "Name": "42-Sys Exhaust 1",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 42,
+            "SensorNumber": 36,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/36",
+            "MemberId": "36",
+            "Name": "43-Sys Exhaust 2",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 38,
+            "SensorNumber": 37,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/37",
+            "MemberId": "37",
+            "Name": "44-Exp Bay Drive",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 38,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/38",
+            "MemberId": "38",
+            "Name": "45-BMC",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 70,
+            "SensorNumber": 39,
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/39",
+            "MemberId": "39",
+            "Name": "47-mLOM 1 Bd Zn",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 40,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/40",
+            "MemberId": "40",
+            "Name": "48-mLOM 2 Bd Zn",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 41,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/41",
+            "MemberId": "41",
+            "Name": "49-mLOM 2 Optic",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 42,
+            "Status": {
+              "State": "Absent"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Thermal/#Temperatures/42",
+            "MemberId": "42",
+            "Name": "50-AHCI HD Max",
+            "PhysicalContext": "SystemBoard",
+            "ReadingCelsius": 0,
+            "SensorNumber": 43,
+            "Status": {
+              "State": "Absent"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/",
+        "@odata.type": "#StorageCollection.StorageCollection",
+        "Description": "Storage subsystems known to this system",
+        "Name": "Storage",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/"
+          },
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000004/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/",
+        "@odata.type": "#Storage.v1_12_0.Storage",
+        "Id": "DA000004",
+        "Controllers": {
+          "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/"
+        },
+        "Drives": [],
+        "Links": {
+          "Enclosures": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/"
+            }
+          ]
+        },
+        "Name": "SATA Storage System",
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        },
+        "StorageControllers": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004#/StorageControllers/0/",
+            "Location": {
+              "PartLocation": {
+                "ServiceLabel": "System Board"
+              }
+            },
+            "MemberId": "0",
+            "Model": "Embedded SATA Controller #1",
+            "Name": "SATA Storage Controller",
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "SupportedDeviceProtocols": [
+              "SATA"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000005/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/",
+        "@odata.type": "#Storage.v1_12_0.Storage",
+        "Id": "DA000005",
+        "Controllers": {
+          "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/"
+        },
+        "Drives": [],
+        "Links": {
+          "Enclosures": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/"
+            }
+          ]
+        },
+        "Name": "SATA Storage System",
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        },
+        "StorageControllers": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005#/StorageControllers/0/",
+            "Location": {
+              "PartLocation": {
+                "ServiceLabel": "System Board"
+              }
+            },
+            "MemberId": "0",
+            "Model": "Embedded SATA Controller #2",
+            "Name": "SATA Storage Controller",
+            "Status": {
+              "Health": null,
+              "State": null
+            },
+            "SupportedDeviceProtocols": [
+              "SATA"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/",
+        "@odata.type": "#StorageControllerCollection.StorageControllerCollection",
+        "Description": "Storage Controllers associated with this storage subsystem.",
+        "Name": "Storage Controller Collection",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/0/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/",
+        "@odata.type": "#StorageControllerCollection.StorageControllerCollection",
+        "Description": "Storage Controllers associated with this storage subsystem.",
+        "Name": "Storage Controller Collection",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/0/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000004/Controllers/0/",
+        "@odata.type": "#StorageController.v1_0_0.StorageController",
+        "Id": "0",
+        "Description": "SATA Storage Controller",
+        "Location": {
+          "PartLocation": {
+            "ServiceLabel": "System Board"
+          }
+        },
+        "Model": "Embedded SATA Controller #1",
+        "Name": "SATA Storage Controller",
+        "Status": {
+          "Health": null,
+          "State": null
+        },
+        "SupportedDeviceProtocols": [
+          "SATA"
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage/DA000005/Controllers/0/",
+        "@odata.type": "#StorageController.v1_0_0.StorageController",
+        "Id": "0",
+        "Description": "SATA Storage Controller",
+        "Location": {
+          "PartLocation": {
+            "ServiceLabel": "System Board"
+          }
+        },
+        "Model": "Embedded SATA Controller #2",
+        "Name": "SATA Storage Controller",
+        "Status": {
+          "Health": null,
+          "State": null
+        },
+        "SupportedDeviceProtocols": [
+          "SATA"
+        ]
+      }
+    }
+  ]
+}

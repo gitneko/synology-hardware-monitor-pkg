@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 struct Facts {
     disabled: bool,
     other_state: bool,
+    absent: bool,
+    other_presence: bool,
     unavailable: bool,
     reported_fault: bool,
     informational: bool,
@@ -15,6 +17,11 @@ struct Facts {
     empty_simple: bool,
     populated: bool,
     empty_collection: bool,
+    complete_members: bool,
+    incomplete_members: bool,
+    sata_only: bool,
+    other_protocols: bool,
+    uncertain_inventory: bool,
     members: BTreeSet<String>,
     storage: Option<Storage>,
 }
@@ -25,6 +32,7 @@ struct Storage {
     empty_volumes: bool,
     controllers: Vec<String>,
     controller_collection: Option<String>,
+    sata_without_volumes: bool,
 }
 
 #[derive(Default)]
@@ -37,9 +45,7 @@ fn empty_array(value: &Value, name: &str) -> bool {
         .is_some_and(Vec::is_empty)
         && value
             .get(format!("{name}@odata.count"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            == 0
+            .is_none_or(|count| count.as_u64() == Some(0))
         && value.get(format!("{name}@odata.nextLink")).is_none()
 }
 
@@ -52,6 +58,10 @@ fn child_key(parent: &str, name: &str, item: &Value, index: usize) -> String {
 
 impl Applicability {
     pub(crate) fn observe(&mut self, fallback: &str, value: &Value) {
+        self.observe_context(fallback, value, None);
+    }
+
+    fn observe_context(&mut self, fallback: &str, value: &Value, embedded: Option<&str>) {
         if value.get("Message").is_some() {
             return;
         }
@@ -70,6 +80,8 @@ impl Applicability {
         if let Some(state) = value.pointer("/Status/State").and_then(Value::as_str) {
             facts.disabled |= state == "Disabled";
             facts.other_state |= state != "Disabled";
+            facts.absent |= state == "Absent";
+            facts.other_presence |= state != "Absent";
             facts.unavailable |= !matches!(state, "Disabled" | "Enabled");
         }
         facts.has_status |= value.get("Status").is_some();
@@ -81,7 +93,16 @@ impl Applicability {
                     Some("Warning" | "Critical")
                 )
             });
-        facts.informational |= kind == "PowerControl"
+        facts.reported_fault |= value
+            .pointer("/Status/Conditions")
+            .and_then(Value::as_array)
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.get("Severity").and_then(Value::as_str) != Some("OK"))
+            });
+        facts.informational |= (kind == "PowerControl"
+            || (kind.is_empty() && embedded == Some("PowerControl")))
             && value
                 .get("PowerConsumedWatts")
                 .and_then(Value::as_f64)
@@ -108,7 +129,37 @@ impl Applicability {
         });
         facts.empty_simple |= kind == "SimpleStorage" && empty_array(value, "Devices");
         facts.empty_collection |= empty_array(value, "Members");
+        facts.sata_only |= value
+            .get("SupportedDeviceProtocols")
+            .and_then(Value::as_array)
+            .is_some_and(|protocols| {
+                !protocols.is_empty() && protocols.iter().all(|p| p.as_str() == Some("SATA"))
+            });
+        facts.other_protocols |= value
+            .get("SupportedDeviceProtocols")
+            .is_some_and(|protocols| {
+                !protocols.as_array().is_some_and(|items| {
+                    !items.is_empty() && items.iter().all(|p| p.as_str() == Some("SATA"))
+                })
+            });
+        facts.uncertain_inventory |=
+            [Some(value), value.get("Links")]
+                .into_iter()
+                .flatten()
+                .any(|inventory| {
+                    ["Drives", "Volumes"].iter().any(|name| {
+                        inventory.get(*name).is_some_and(|v| !v.is_array())
+                            || inventory.get(format!("{name}@odata.nextLink")).is_some()
+                    })
+                });
         if let Some(members) = value.get("Members").and_then(Value::as_array) {
+            let complete = value.get("Members@odata.nextLink").is_none()
+                && value.get("@odata.nextLink").is_none()
+                && value
+                    .get("Members@odata.count")
+                    .is_none_or(|count| count.as_u64() == Some(members.len() as u64));
+            facts.complete_members |= complete;
+            facts.incomplete_members |= !complete;
             facts.members.extend(
                 members
                     .iter()
@@ -136,14 +187,25 @@ impl Applicability {
                     .pointer("/Controllers/@odata.id")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                // A missing Volumes inventory is normally unknown. The narrower
+                // SATA case is checked against every linked controller below.
+                sata_without_volumes: value.pointer("/Status/Health").and_then(Value::as_str)
+                    == Some("OK")
+                    && value.pointer("/Status/State").and_then(Value::as_str) == Some("Enabled")
+                    && !value
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .any(|k| k == "Volumes" || k.starts_with("Volumes@")),
             });
         }
         for name in crate::collector::LINK_KEYS.iter().chain(["Members"].iter()) {
             if let Some(array) = value.get(*name).and_then(Value::as_array) {
                 for (index, item) in array.iter().enumerate() {
-                    self.observe(
+                    self.observe_context(
                         &crate::correlation::embedded_uri(key, name, item, index),
                         item,
+                        (kind == "Power" && *name == "PowerControl").then_some("PowerControl"),
                     );
                 }
             }
@@ -159,6 +221,8 @@ impl Applicability {
         for (key, facts) in &self.0 {
             if facts.disabled && !facts.other_state {
                 excluded.insert(key.clone(), AssessmentExclusion::Disabled);
+            } else if facts.absent && !facts.other_presence {
+                excluded.insert(key.clone(), AssessmentExclusion::Absent);
             } else if facts.informational && !facts.has_status {
                 excluded.insert(key.clone(), AssessmentExclusion::Informational);
             }
@@ -171,7 +235,10 @@ impl Applicability {
                                 .volumes
                                 .as_ref()
                                 .and_then(|uri| self.0.get(uri))
-                                .is_some_and(|v| v.empty_collection && !v.populated))
+                                .is_some_and(|v| v.empty_collection && !v.populated)
+                            || (storage.sata_without_volumes
+                                && !facts.reported_fault
+                                && self.empty_sata_controllers(storage)))
                 });
             if !facts.populated && !facts.unavailable && (facts.empty_simple || empty_storage) {
                 excluded
@@ -216,12 +283,193 @@ impl Applicability {
         });
         excluded
     }
+
+    fn empty_sata_controllers(&self, storage: &Storage) -> bool {
+        let mut controllers: BTreeSet<_> = storage.controllers.iter().collect();
+        if let Some(collection) = &storage.controller_collection {
+            let Some(facts) = self
+                .0
+                .get(collection)
+                .filter(|f| f.complete_members && !f.incomplete_members && !f.members.is_empty())
+            else {
+                return false;
+            };
+            controllers.extend(&facts.members);
+        }
+        !controllers.is_empty()
+            && controllers.iter().all(|key| {
+                self.0.get(*key).is_some_and(|f| {
+                    f.sata_only
+                        && !f.other_protocols
+                        && !f.uncertain_inventory
+                        && !f.populated
+                        && !f.unavailable
+                        && !f.reported_fault
+                })
+            })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn live_fixture() -> Vec<Value> {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hpe-applicability.json")).unwrap();
+        fixture["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["body"].clone())
+            .collect()
+    }
+    fn assess(
+        values: &[Value],
+    ) -> (
+        BTreeMap<String, Observation>,
+        BTreeMap<String, AssessmentExclusion>,
+    ) {
+        let mut a = Applicability::default();
+        let mut obs = BTreeMap::new();
+        for value in values {
+            let uri = value["@odata.id"].as_str().unwrap();
+            a.observe(uri, value);
+            crate::collector::normalize(uri, value, &mut obs, &mut Vec::new());
+        }
+        let excluded = a.exclusions(&obs);
+        (obs, excluded)
+    }
+    #[test]
+    fn live_ilo_fixture_explains_all_28_unknowns_without_inventing_healthy_readings() {
+        let (obs, excluded) = assess(&live_fixture());
+        assert_eq!(excluded.len(), 28);
+        for (reason, count) in [
+            (AssessmentExclusion::Absent, 23),
+            (AssessmentExclusion::Informational, 1),
+            (AssessmentExclusion::EmptyController, 4),
+        ] {
+            assert_eq!(excluded.values().filter(|&&r| r == reason).count(), count);
+        }
+        assert!(obs
+            .values()
+            .filter(|o| o.health == Health::Unknown)
+            .all(|o| excluded.contains_key(&o.key)));
+        for (key, reason) in &excluded {
+            assert_eq!(obs[key].health, Health::Unknown);
+            if *reason == AssessmentExclusion::Absent {
+                assert!(obs[key].reading.is_none());
+            }
+        }
+        let snapshot = crate::model::Snapshot {
+            observations: obs.into_values().collect(),
+            assessment_exclusions: excluded,
+            ..Default::default()
+        };
+        let evaluation = crate::acknowledgement::Evaluation {
+            statuses: BTreeMap::new(),
+        };
+        assert_eq!(evaluation.overall(Some(&snapshot), false), "ok");
+        assert_eq!(evaluation.overall(Some(&snapshot), true), "unknown");
+    }
+    #[test]
+    fn absent_is_not_neutral_when_another_representation_is_present_or_faulty() {
+        for extra in [
+            json!({"State":"Enabled"}),
+            json!({"State":"UnavailableOffline"}),
+            json!({"Health":"Warning"}),
+            json!({"Health":"Critical"}),
+            json!({"Conditions":[{"Severity":"Critical"}]}),
+        ] {
+            let mut a = Applicability::default();
+            a.observe("fan", &json!({"Status":{"State":"Absent"}}));
+            a.observe("fan", &json!({"Status":extra}));
+            assert!(a
+                .exclusions(&observations(&[("fan", Health::Unknown)]))
+                .is_empty());
+        }
+    }
+    #[test]
+    fn untyped_power_requires_explicit_power_control_membership_and_no_status() {
+        for (parent_kind, child, expected) in [
+            ("Power", json!({"PowerConsumedWatts":78}), true),
+            (
+                "Power",
+                json!({"PowerConsumedWatts":78,"Status":null}),
+                false,
+            ),
+            (
+                "Power",
+                json!({"PowerConsumedWatts":78,"Status":{"Health":"Warning"}}),
+                false,
+            ),
+            (
+                "Power",
+                json!({"PowerConsumedWatts":78,"@odata.type":"#Sensor.v1_0_0.Sensor"}),
+                false,
+            ),
+            ("Other", json!({"PowerConsumedWatts":78}), false),
+        ] {
+            let parent = json!({"@odata.id":"power","@odata.type":format!("#Power.v1_3_0.{parent_kind}"),"PowerControl":[child]});
+            let (obs, excluded) = assess(&[parent]);
+            assert_eq!(excluded.contains_key("power#PowerControl:0"), expected);
+            assert!(!obs.is_empty());
+        }
+    }
+    #[test]
+    fn sata_without_volumes_requires_healthy_complete_sata_only_empty_inventory() {
+        let storage = "/redfish/v1/Systems/1/Storage/DA000004/";
+        let embedded = "/redfish/v1/Systems/1/Storage/DA000004#/StorageControllers/0/";
+        let controller = format!("{storage}Controllers/0/");
+        for case in 0..13 {
+            let mut values = live_fixture();
+            let root = values
+                .iter_mut()
+                .find(|v| v["@odata.id"] == storage)
+                .unwrap();
+            match case {
+                0 => root["Drives"] = json!([{"@odata.id":"/redfish/v1/Drives/1"}]),
+                1 => root["Volumes"] = Value::Null,
+                2 => root["Volumes"] = json!({"@odata.id":"missing"}),
+                3 => root["Status"]["Health"] = Value::Null,
+                4 => root["Status"]["State"] = json!("UnavailableOffline"),
+                5 => {
+                    root["StorageControllers"][0]["SupportedDeviceProtocols"] =
+                        json!(["SATA", "SAS"])
+                }
+                6 => root["Drives@odata.count"] = json!(1),
+                7 => root["Volumes@odata.count"] = json!(0),
+                12 => root["Drives@odata.count"] = Value::Null,
+                _ => {}
+            }
+            match case {
+                8 => values.retain(|v| v["@odata.id"] != controller),
+                9 => {
+                    values
+                        .iter_mut()
+                        .find(|v| v["@odata.id"] == format!("{storage}Controllers/"))
+                        .unwrap()["Members@odata.nextLink"] = json!("next")
+                }
+                10 => {
+                    values
+                        .iter_mut()
+                        .find(|v| v["@odata.id"] == controller)
+                        .unwrap()["Links"] = json!({"Volumes":{"@odata.id":"missing"}})
+                }
+                11 => {
+                    values
+                        .iter_mut()
+                        .find(|v| v["@odata.id"] == controller)
+                        .unwrap()["Status"]["Health"] = json!("Critical")
+                }
+                _ => {}
+            }
+            let (_, excluded) = assess(&values);
+            assert!(!excluded.contains_key(embedded), "case {case}");
+            assert!(!excluded.contains_key(&controller), "case {case}");
+        }
+    }
 
     fn observations(values: &[(&str, Health)]) -> BTreeMap<String, Observation> {
         values
@@ -247,7 +495,9 @@ mod tests {
             ("Disabled", Health::Unknown, true),
             ("Disabled", Health::Warning, false),
             ("Disabled", Health::Critical, false),
-            ("Absent", Health::Unknown, false),
+            ("Absent", Health::Unknown, true),
+            ("Absent", Health::Warning, false),
+            ("Absent", Health::Critical, false),
             ("UnavailableOffline", Health::Unknown, false),
             ("Starting", Health::Unknown, false),
         ] {

@@ -29,6 +29,7 @@ const TABLES: &[(&str,&str)]=&[
     ("notification_settings","id,config,revision"),
     ("outbox","id,event_id,delivered,attempts,next_try,cancelled,transport"),
     ("mail_recipient","outbox_id,recipient,message_id,revision,delivered,attempts,next_try,error,permanent"),
+    ("mail_replay", crate::mail_replay::COLUMNS),
     ("desktop_jobs","event_id,recipient,revision,delivered,attempts,next_try,error,cancelled"),
     ("audit_log","id,actor,action,device,outcome,created"),
 ];
@@ -146,15 +147,24 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
         }
         if archive.format == 2 {
             anyhow::ensure!(
-                archive.tables.len() == TABLES.len() - 1
+                archive.tables.len() == TABLES.len() - 2
                     && !archive.tables.contains_key("alarm_control"),
                 "legacy tables"
             );
             archive.tables.insert("alarm_control".into(), Vec::new());
             archive.format = 3;
         }
+        if archive.format == 3 {
+            anyhow::ensure!(
+                archive.tables.len() == TABLES.len() - 1
+                    && !archive.tables.contains_key("mail_replay"),
+                "legacy replay table"
+            );
+            archive.tables.insert("mail_replay".into(), Vec::new());
+            archive.format = 4;
+        }
         anyhow::ensure!(
-            archive.format == 3 && archive.tables.len() == TABLES.len(),
+            archive.format == 4 && archive.tables.len() == TABLES.len(),
             "version/tables"
         );
         for (table, columns) in TABLES {
@@ -240,7 +250,7 @@ impl Store {
         }
         tx.commit()?;
         Ok(Archive {
-            format: 3,
+            format: 4,
             version: env!("CARGO_PKG_VERSION").into(),
             created: crate::now(),
             tables,
@@ -283,6 +293,7 @@ impl Store {
                 r.get(0)
             })?;
         for table in [
+            "mail_replay",
             "mail_recipient",
             "desktop_jobs",
             "outbox",
@@ -528,6 +539,7 @@ impl Store {
             "foreign keys"
         );
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL", [])?;
+        crate::mail_replay::cancel(&tx, crate::now())?;
         tx.execute(
             "UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL",
             [],
@@ -541,6 +553,63 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replay_history_roundtrips_but_pending_jobs_and_drafts_never_resume_and_format_three_still_loads(
+    ) {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let v1 = Vault::open(&source.path().join("master.key")).unwrap();
+        let v2 = Vault::open(&target.path().join("master.key")).unwrap();
+        let mut s = Store::open(source.path()).unwrap();
+        let settings = crate::mail::Settings {
+            host: "localhost".into(),
+            from_address: "sender@example.invalid".into(),
+            recipients: vec!["alarm@example.invalid".into()],
+            ..Default::default()
+        };
+        s.save_mail(&settings, b"", 0, "admin").unwrap();
+        s.0.execute("INSERT INTO events(id,device,key,kind,health,message,created) VALUES(1,'removed','drive','alarm','\"critical\"','Original hardware fault',100)",[]).unwrap();
+        let first = s
+            .preview_mail_replay(1, "alarm@example.invalid", "admin", 200)
+            .unwrap();
+        s.enqueue_mail_replay(first["id"].as_str().unwrap(), "admin", 200)
+            .unwrap();
+        let job = s.pending_mail_replay(200).unwrap().unwrap();
+        s.finish_mail_replay(&job, None, 201).unwrap();
+        let pending = s
+            .preview_mail_replay(1, "alarm@example.invalid", "admin", 202)
+            .unwrap();
+        s.enqueue_mail_replay(pending["id"].as_str().unwrap(), "admin", 202)
+            .unwrap();
+        s.preview_mail_replay(1, "alarm@example.invalid", "admin", 203)
+            .unwrap();
+        let archive = s.make_archive(&v1).unwrap();
+        let decoded = decrypt(
+            &encrypt(&archive, "synthetic-backup-password").unwrap(),
+            "synthetic-backup-password",
+        )
+        .unwrap();
+        assert_eq!(decoded.format, 4);
+        let mut t = Store::open(target.path()).unwrap();
+        t.restore_archive(&decoded, &v2, "target-admin", 0).unwrap();
+        assert!(t.pending_mail_replay(crate::now()).unwrap().is_none());
+        let history = t.mail_replay_history(1).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history
+            .iter()
+            .any(|j| j["state"] == "submitted" && j["message_id"] == job.message_id));
+        assert!(history.iter().any(|j| j["state"] == "cancelled"));
+        let mut old = archive;
+        old.format = 3;
+        old.tables.remove("mail_replay");
+        let decoded = decrypt(
+            &encrypt(&old, "synthetic-backup-password").unwrap(),
+            "synthetic-backup-password",
+        )
+        .unwrap();
+        assert_eq!(decoded.format, 4);
+        assert!(decoded.tables["mail_replay"].is_empty());
+    }
     #[test]
     fn acknowledged_faults_roundtrip_but_require_review_and_old_format_two_still_imports() {
         let source = tempfile::tempdir().unwrap();
@@ -599,12 +668,13 @@ mod tests {
         let mut legacy = s.make_archive(&v1).unwrap();
         legacy.format = 2;
         legacy.tables.remove("alarm_control");
+        legacy.tables.remove("mail_replay");
         let decoded = decrypt(
             &encrypt(&legacy, "synthetic-backup-password").unwrap(),
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 3);
+        assert_eq!(decoded.format, 4);
         assert!(decoded.tables["alarm_control"].is_empty());
         let cursor = t.audit_cursor().unwrap();
         t.restore_archive(&decoded, &v2, "target-admin", cursor)
@@ -697,6 +767,7 @@ mod tests {
         let mut legacy = decrypt(&file, "a sufficiently long password").unwrap();
         legacy.format = 1;
         legacy.tables.remove("alarm_control");
+        legacy.tables.remove("mail_replay");
         for table in ["mail_settings", "notification_settings"] {
             for row in legacy.tables.get_mut(table).unwrap() {
                 if let Cell::Text(raw) = &mut row[1] {
@@ -711,7 +782,7 @@ mod tests {
         }
         let old_file = encrypt(&legacy, "a sufficiently long password").unwrap();
         let decoded = decrypt(&old_file, "a sufficiently long password").unwrap();
-        assert_eq!(decoded.format, 3);
+        assert_eq!(decoded.format, 4);
         assert!(matches!(
             decoded.tables["events"][0].last(),
             Some(Cell::Null)

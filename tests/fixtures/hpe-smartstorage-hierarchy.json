@@ -1,0 +1,403 @@
+{
+  "description": "Selected, sanitized iLO 5 SmartStorage inventory and dependency fields observed on 2026-10-20. No credentials, device addresses, serials or hardware logs.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Systems/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/",
+        "@odata.type": "#ComputerSystemCollection.ComputerSystemCollection",
+        "Name": "Computer Systems",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/",
+        "@odata.type": "#ChassisCollection.ChassisCollection",
+        "Name": "Computer System Chassis",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/",
+        "@odata.type": "#ComputerSystem.v1_17_0.ComputerSystem",
+        "Name": "Computer System",
+        "Status": {
+          "Health": "Warning",
+          "HealthRollup": "Warning",
+          "State": "Enabled"
+        },
+        "Model": "ProLiant DL160 Gen10",
+        "Bios": {
+          "@odata.id": "/redfish/v1/systems/1/bios/"
+        },
+        "Boot": {
+          "BootOptions": {
+            "@odata.id": "/redfish/v1/Systems/1/BootOptions/"
+          }
+        },
+        "EthernetInterfaces": {
+          "@odata.id": "/redfish/v1/Systems/1/EthernetInterfaces/"
+        },
+        "Links": {
+          "ManagedBy": [
+            {
+              "@odata.id": "/redfish/v1/Managers/1/"
+            }
+          ],
+          "Chassis": [
+            {
+              "@odata.id": "/redfish/v1/Chassis/1/"
+            }
+          ]
+        },
+        "LogServices": {
+          "@odata.id": "/redfish/v1/Systems/1/LogServices/"
+        },
+        "Memory": {
+          "@odata.id": "/redfish/v1/Systems/1/Memory/"
+        },
+        "MemoryDomains": {
+          "@odata.id": "/redfish/v1/Systems/1/MemoryDomains/"
+        },
+        "NetworkInterfaces": {
+          "@odata.id": "/redfish/v1/Systems/1/NetworkInterfaces/"
+        },
+        "Oem": {
+          "Hpe": {
+            "Links": {
+              "HpeIpProvider": {
+                "@odata.id": "/redfish/v1/systems/1/hpeip/"
+              },
+              "PCISlots": {
+                "@odata.id": "/redfish/v1/Systems/1/PCISlots/"
+              },
+              "NetworkAdapters": {
+                "@odata.id": "/redfish/v1/Systems/1/BaseNetworkAdapters/"
+              },
+              "SmartStorage": {
+                "@odata.id": "/redfish/v1/Systems/1/SmartStorage/"
+              },
+              "USBPorts": {
+                "@odata.id": "/redfish/v1/Systems/1/USBPorts/"
+              },
+              "USBDevices": {
+                "@odata.id": "/redfish/v1/Systems/1/USBDevices/"
+              },
+              "EthernetInterfaces": {
+                "@odata.id": "/redfish/v1/Systems/1/EthernetInterfaces/"
+              },
+              "WorkloadPerformanceAdvisor": {
+                "@odata.id": "/redfish/v1/Systems/1/WorkloadPerformanceAdvisor/"
+              },
+              "SecureEraseReportService": {
+                "@odata.id": "/redfish/v1/Systems/1/SecureEraseReportService/"
+              },
+              "PCIDevices": [
+                {
+                  "@odata.id": "/redfish/v1/Systems/1/PCIDevices/"
+                }
+              ]
+            },
+            "SmartStorageConfig": [
+              {
+                "@odata.id": "/redfish/v1/systems/1/smartstorageconfig/"
+              },
+              {
+                "@odata.id": "/redfish/v1/systems/1/smartstorageconfig1/"
+              }
+            ]
+          }
+        },
+        "Processors": {
+          "@odata.id": "/redfish/v1/Systems/1/Processors/"
+        },
+        "SecureBoot": {
+          "@odata.id": "/redfish/v1/Systems/1/SecureBoot/"
+        },
+        "Storage": {
+          "@odata.id": "/redfish/v1/Systems/1/Storage/"
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/",
+        "@odata.type": "#Chassis.v1_23_0.Chassis",
+        "Name": "Computer System Chassis",
+        "Status": {
+          "Health": "Warning",
+          "State": "Enabled"
+        },
+        "Model": "ProLiant DL160 Gen10",
+        "Links": {
+          "ManagedBy": [
+            {
+              "@odata.id": "/redfish/v1/Managers/1/"
+            }
+          ],
+          "ComputerSystems": [
+            {
+              "@odata.id": "/redfish/v1/Systems/1/"
+            }
+          ]
+        },
+        "NetworkAdapters": {
+          "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/"
+        },
+        "Oem": {
+          "Hpe": {
+            "Links": {
+              "Devices": {
+                "@odata.id": "/redfish/v1/Chassis/1/Devices/"
+              }
+            }
+          }
+        },
+        "PCIeDevices": {
+          "@odata.id": "/redfish/v1/Chassis/1/PCIeDevices/"
+        },
+        "PCIeSlots": {
+          "@odata.id": "/redfish/v1/Chassis/1/PCIeSlots/"
+        },
+        "Power": {
+          "@odata.id": "/redfish/v1/Chassis/1/Power/"
+        },
+        "Thermal": {
+          "@odata.id": "/redfish/v1/Chassis/1/Thermal/"
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/",
+        "@odata.type": "#HpeSmartStorage.v2_0_0.HpeSmartStorage",
+        "Name": "HpeSmartStorage",
+        "Status": {
+          "Health": "Warning"
+        },
+        "Links": {
+          "HostBusAdapters": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/HostBusAdapters/"
+          },
+          "ArrayControllers": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/"
+          }
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/",
+        "@odata.type": "#HpeSmartStorageArrayControllerCollection.HpeSmartStorageArrayControllerCollection",
+        "Name": "HpeSmartStorageArrayControllers",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/",
+        "@odata.type": "#HpeSmartStorageArrayController.v2_2_0.HpeSmartStorageArrayController",
+        "Name": "Hpe Smart Storage Array Controller",
+        "Status": {
+          "Health": "Warning",
+          "State": "Enabled"
+        },
+        "Model": "HPE Smart Array E208i-p SR Gen10",
+        "Links": {
+          "LogicalDrives": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/"
+          },
+          "StorageEnclosures": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/"
+          },
+          "PhysicalDrives": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/"
+          },
+          "UnconfiguredDrives": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/UnconfiguredDrives/"
+          }
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/",
+        "@odata.type": "#HpeSmartStorageLogicalDriveCollection.HpeSmartStorageLogicalDriveCollection",
+        "Name": "HpeSmartStorageLogicalDrives",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/",
+        "@odata.type": "#HpeSmartStorageStorageEnclosureCollection.HpeSmartStorageStorageEnclosureCollection",
+        "Name": "HpSmartStorageEnclosures",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/0/"
+          },
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/1/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/",
+        "@odata.type": "#HpeSmartStorageDiskDriveCollection.HpeSmartStorageDiskDriveCollection",
+        "Name": "HpeSmartStorageDiskDrives",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/0/"
+          },
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/1/"
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/UnconfiguredDrives/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/UnconfiguredDrives/",
+        "@odata.type": "#HpeSmartStorageDiskDriveCollection.HpeSmartStorageDiskDriveCollection",
+        "Name": "HpeSmartStorageUnconfiguredDiskDrives"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/",
+        "@odata.type": "#HpeSmartStorageLogicalDrive.v2_3_0.HpeSmartStorageLogicalDrive",
+        "Name": "HpeSmartStorageLogicalDrive",
+        "Status": {
+          "Health": "Warning",
+          "State": "Enabled"
+        },
+        "InterfaceType": "SAS",
+        "Raid": "1",
+        "MediaType": "HDD",
+        "Links": {
+          "DataDrives": {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/DataDrives/"
+          }
+        },
+        "LogicalDriveStatusReasons": [
+          "Recovering"
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/0/",
+        "@odata.type": "#HpeSmartStorageStorageEnclosure.v2_0_0.HpeSmartStorageStorageEnclosure",
+        "Name": "HpeSmartStorageEnclosure",
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        },
+        "Model": ""
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/StorageEnclosures/1/",
+        "@odata.type": "#HpeSmartStorageStorageEnclosure.v2_0_0.HpeSmartStorageStorageEnclosure",
+        "Name": "HpeSmartStorageEnclosure",
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        },
+        "Model": ""
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/0/",
+        "@odata.type": "#HpeSmartStorageDiskDrive.v2_1_0.HpeSmartStorageDiskDrive",
+        "Name": "HpeSmartStorageDiskDrive",
+        "Status": {
+          "Health": "Critical",
+          "State": "Enabled"
+        },
+        "Model": "EG002400JWJNN",
+        "InterfaceType": "SAS",
+        "CapacityGB": 0,
+        "MediaType": "HDD",
+        "DiskDriveStatusReasons": [
+          "Failed"
+        ],
+        "Location": "1I:1:1",
+        "LocationFormat": "ControllerPort:Box:Bay"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/1/",
+        "@odata.type": "#HpeSmartStorageDiskDrive.v2_1_0.HpeSmartStorageDiskDrive",
+        "Name": "HpeSmartStorageDiskDrive",
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        },
+        "Model": "EG002400JWJNN",
+        "InterfaceType": "SAS",
+        "CapacityGB": 2400,
+        "MediaType": "HDD",
+        "DiskDriveStatusReasons": [
+          "None"
+        ],
+        "Location": "1I:1:2",
+        "LocationFormat": "ControllerPort:Box:Bay"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/DataDrives/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/DataDrives/",
+        "@odata.type": "#HpeSmartStorageDiskDriveCollection.HpeSmartStorageDiskDriveCollection",
+        "Name": "HpeSmartStorageDiskDrives",
+        "Members": [
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/0/"
+          },
+          {
+            "@odata.id": "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/1/"
+          }
+        ]
+      }
+    }
+  ]
+}

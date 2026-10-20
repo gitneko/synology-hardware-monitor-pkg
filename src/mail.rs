@@ -341,6 +341,15 @@ impl Settings {
     }
     pub fn message(&self, event: &Event, recipient: &str, message_id: &str) -> Result<Message> {
         let (subject, body) = self.preview(event)?;
+        self.rendered_message(&subject, &body, recipient, message_id)
+    }
+    fn rendered_message(
+        &self,
+        subject: &str,
+        body: &str,
+        recipient: &str,
+        message_id: &str,
+    ) -> Result<Message> {
         Ok(Message::builder()
             .from(Mailbox::new(
                 Some(self.from_name.clone()),
@@ -350,7 +359,7 @@ impl Settings {
             .subject(subject)
             .message_id(Some(message_id.into()))
             .header(ContentType::TEXT_PLAIN)
-            .body(body)?)
+            .body(body.to_owned())?)
     }
 }
 fn address(value: &str) -> Result<lettre::Address> {
@@ -367,12 +376,29 @@ pub async fn submit(
     recipient: &str,
     id: &str,
 ) -> Result<(), &'static str> {
-    let transport = settings
-        .transport(password)
-        .map_err(|_| "mail_config_invalid")?;
     let message = settings
         .message(event, recipient, id)
         .map_err(|_| "mail_template_invalid")?;
+    submit_message(settings, password, message).await
+}
+pub async fn submit_rendered(
+    settings: &Settings,
+    password: Option<&str>,
+    job: &crate::mail_replay::Job,
+) -> Result<(), &'static str> {
+    let message = settings
+        .rendered_message(&job.subject, &job.body, &job.recipient, &job.message_id)
+        .map_err(|_| "mail_template_invalid")?;
+    submit_message(settings, password, message).await
+}
+async fn submit_message(
+    settings: &Settings,
+    password: Option<&str>,
+    message: Message,
+) -> Result<(), &'static str> {
+    let transport = settings
+        .transport(password)
+        .map_err(|_| "mail_config_invalid")?;
     match tokio::time::timeout(Duration::from_secs(12), transport.send(message)).await {
         Err(_) => Err("mail_timeout"),
         Ok(Ok(_)) => Ok(()),

@@ -18,6 +18,8 @@ Build 0018 consolidates DSM 7 delivery into one `x86_64` SPK, covering the docum
 
 The collector follows advertised Redfish resources, selected HPE SmartStorage links and embedded data. It records unavailable/forbidden/missing resources as coverage information; it does not assume all firmware exposes identical objects. HTTP 403 can indicate permissions or licensing and is not treated as proof of either cause alone. Hardware resources use GET only. POST/DELETE are confined to creating and logging out the collector's own temporary authentication session; power operations, firmware updates and storage configuration actions are not invoked.
 
+Build 0032 additionally verified the DL160 Gen10's HPE SmartStorage physical/data-drive links, E208i-p RAID-1 membership and summary grouping to a reported failed SAS disk. Its standard Storage view separately lists empty SATA controllers and does not expose that array. Earlier complete polls covered only the resources discovered at the time; see the [0032 validation record](VALIDATION.md#build-0032-hpe-smartstorage-discovery-and-alarm-dependencies-20-october-2026).
+
 ## Vendor documentation and licensing boundary
 
 Dell documents Redfish across iDRAC7/8 and states that Redfish is included across license levels, while individual operations still require authorization and some authentication integrations have separate license requirements. That supports targeting ordinary read-only accounts, not a blanket guarantee for every OEM resource. [Dell authentication/authorization guide](https://www.dell.com/support/manuals/en-us/idrac7-8-lifecycle-controller-v2.60.60.60/idrac_2.60.60.60_redfishapiguide/redfish-authentication-and-authorization?guid=guid-d572792f-afd2-499a-bf12-38a6778b9bbc&lang=en-us).

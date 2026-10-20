@@ -55,6 +55,16 @@ pub enum Operation {
     MailTest {
         mail: crate::mail::Input,
     },
+    MailReplayPreview {
+        event_id: i64,
+        recipient: String,
+    },
+    MailReplaySend {
+        id: String,
+    },
+    MailReplayHistory {
+        event_id: i64,
+    },
     AlarmAcknowledge {
         id: String,
         revision: i64,
@@ -147,6 +157,7 @@ pub struct Api {
     probes: tokio::sync::Semaphore,
     mail_gate: tokio::sync::Mutex<()>,
     archives: tokio::sync::Semaphore,
+    replay_turn: std::sync::atomic::AtomicBool,
 }
 impl Api {
     pub fn new(store: Arc<Mutex<Store>>, vault: Arc<Vault>) -> Self {
@@ -155,6 +166,7 @@ impl Api {
             vault,
             probes: tokio::sync::Semaphore::new(2),
             archives: tokio::sync::Semaphore::new(1),
+            replay_turn: std::sync::atomic::AtomicBool::new(true),
             mail_gate: tokio::sync::Mutex::new(()),
         }
     }
@@ -261,6 +273,30 @@ impl Api {
             self.mail_gate.lock().await
         };
         match &request.operation {
+            Operation::MailReplayPreview {
+                event_id,
+                recipient,
+            } => {
+                let preview = self.store.lock().unwrap().preview_mail_replay(
+                    *event_id,
+                    recipient,
+                    actor,
+                    crate::now(),
+                )?;
+                Ok(json!({"ok":true,"preview":preview}))
+            }
+            Operation::MailReplaySend { id } => {
+                let job =
+                    self.store
+                        .lock()
+                        .unwrap()
+                        .enqueue_mail_replay(id, actor, crate::now())?;
+                Ok(json!({"ok":true,"job":job}))
+            }
+            Operation::MailReplayHistory { event_id } => {
+                let history = self.store.lock().unwrap().mail_replay_history(*event_id)?;
+                Ok(json!({"ok":true,"history":history}))
+            }
             Operation::AlarmAcknowledge {
                 id,
                 revision,
@@ -498,7 +534,38 @@ impl Api {
                 crate::now(),
             )?;
         }
-        let Some(job) = self.store.lock().unwrap().pending_mail(crate::now())? else {
+        let automatic = self.store.lock().unwrap().pending_mail(crate::now())?;
+        let manual = self
+            .store
+            .lock()
+            .unwrap()
+            .pending_mail_replay(crate::now())?;
+        // Alternate when both queues have work so manual parser testing cannot
+        // starve automatic alarms (or be starved by their recipient backlog).
+        let manual_first = if automatic.is_some() && manual.is_some() {
+            self.replay_turn
+                .fetch_xor(true, std::sync::atomic::Ordering::Relaxed)
+        } else {
+            automatic.is_none()
+        };
+        if let Some(job) = manual.filter(|_| manual_first) {
+            let password = if job.secret.is_empty() {
+                None
+            } else {
+                Some(self.vault.unseal("settings:smtp", &job.secret)?)
+            };
+            let password = password
+                .as_ref()
+                .map(|p| std::str::from_utf8(p))
+                .transpose()?;
+            let result = crate::mail::submit_rendered(&job.settings, password, &job).await;
+            self.store
+                .lock()
+                .unwrap()
+                .finish_mail_replay(&job, result.err(), crate::now())?;
+            return Ok(());
+        }
+        let Some(job) = automatic else {
             return Ok(());
         };
         let password = if job.secret.is_empty() {
@@ -707,6 +774,11 @@ pub fn message(code: &str) -> &'static str {
         "mail_template_invalid"=>"Die Vorlage enthält einen unbekannten oder unvollständigen Platzhalter.",
         "mail_password_required"=>"SMTP-Passwort erforderlich. Bei neuem Server, Port, TLS-Modus oder Benutzer bitte erneut eingeben.",
         "mail_conflict"=>"Die E-Mail-Einstellungen wurden geändert. Bitte neu laden.",
+        "mail_replay_not_configured"=>"Bitte zuerst gültige SMTP-Einstellungen und Empfänger speichern.",
+        "mail_replay_recipient_invalid"=>"Bitte eine gespeicherte Empfängeradresse auswählen.",
+        "mail_replay_event_missing"=>"Das ursprüngliche Ereignis ist nicht mehr vorhanden. Bitte aktualisieren.",
+        "mail_replay_conflict"=>"Die Versandvorschau ist abgelaufen oder wurde geändert. Bitte eine neue Vorschau erstellen.",
+        "mail_replay_busy"=>"Es sind bereits viele manuelle Versandaufträge offen. Bitte offene Sendungen abwarten.",
         "mail_test_rate_limited"=>"Bitte mindestens 60 Sekunden bis zur nächsten Testmail warten.",
         "mail_timeout"=>"Keine rechtzeitige SMTP-Bestätigung. Die Mail könnte bereits angenommen worden sein; vor Wiederholung das Postfach prüfen.",
         "mail_rejected"=>"Der SMTP-Server hat Anmeldung oder Nachricht dauerhaft abgewiesen. Zugang, Absender und Empfänger prüfen.",
@@ -744,6 +816,114 @@ pub fn message(code: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn mail_replay_requires_native_admin_csrf_saved_recipient_and_owner_and_is_idempotent() {
+        let (_dir, api) = instance();
+        {
+            let mut s = api.store.lock().unwrap();
+            let settings = crate::mail::Settings {
+                host: "localhost".into(),
+                from_address: "sender@example.invalid".into(),
+                recipients: vec!["alarm@example.invalid".into()],
+                ..Default::default()
+            };
+            s.save_mail(&settings, b"", 0, "admin-test").unwrap();
+            s.0.execute("INSERT INTO events(id,device,key,kind,health,message,created) VALUES(1,'removed','fan','recovery','\"ok\"','Historical recovery',100)",[]).unwrap();
+        }
+        for operation in [
+            Operation::MailReplayPreview {
+                event_id: 1,
+                recipient: "alarm@example.invalid".into(),
+            },
+            Operation::MailReplaySend {
+                id: "invalid".into(),
+            },
+            Operation::MailReplayHistory { event_id: 1 },
+        ] {
+            let mut req = request(&api, operation);
+            assert_eq!(
+                dsm::error_code(
+                    &api.authorized(&req, "viewer-test", Role::Viewer)
+                        .await
+                        .unwrap_err()
+                ),
+                "write_administrator_required"
+            );
+            req.csrf = None;
+            assert_eq!(
+                dsm::error_code(
+                    &api.authorized(&req, "admin-test", Role::Administrator)
+                        .await
+                        .unwrap_err()
+                ),
+                "write_csrf_invalid"
+            );
+        }
+        let wrong = request(
+            &api,
+            Operation::MailReplayPreview {
+                event_id: 1,
+                recipient: "external@example.invalid".into(),
+            },
+        );
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&wrong, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "mail_replay_recipient_invalid"
+        );
+        let p = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::MailReplayPreview {
+                        event_id: 1,
+                        recipient: "alarm@example.invalid".into(),
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let id = p["preview"]["id"].as_str().unwrap().to_owned();
+        let send = request(&api, Operation::MailReplaySend { id });
+        let submission = api.mail_gate.lock().await;
+        let mut action = Box::pin(api.authorized(&send, "admin-test", Role::Administrator));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut action)
+                .await
+                .is_err()
+        );
+        drop(submission);
+        assert_eq!(action.await.unwrap()["job"]["state"], "queued");
+        assert_eq!(
+            api.authorized(&send, "admin-test", Role::Administrator)
+                .await
+                .unwrap()["job"]["state"],
+            "queued"
+        );
+        assert_eq!(
+            api.store
+                .lock()
+                .unwrap()
+                .mail_replay_history(1)
+                .unwrap()
+                .len(),
+            1
+        );
+        let dashboard = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "viewer-test",
+                Role::Viewer,
+            )
+            .await
+            .unwrap();
+        assert!(dashboard["data"]["mail"].is_null());
+    }
     #[tokio::test]
     async fn acknowledgement_waits_for_submission_gate_and_later_polls_keep_the_decision() {
         let (_dir, api) = instance();

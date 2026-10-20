@@ -26,6 +26,28 @@ Earlier R340 GET records showed PS1 Critical/UnavailableOffline with 0 W and a h
 
 Check start/stop/restart/upgrade, logout/session expiry, denied users and viewer roles before wider deployment. Full DSM ACL enforcement, directory services, storage-full behavior and long-running resource use remain open. See [Roadmap](ROADMAP.md).
 
+## Build 0034 iLO applicability (pending NAS acceptance)
+
+1. Upgrade to build 0034, reopen Hardware Monitor and wait for a completed fresh iLO poll.
+2. If the reported configuration is unchanged, verify **Not present** for Fan 1-4 and the 19 absent temperature sensors, **Information** for PowerControl consumption, and **Controller without drives** for the four SATA representations. Vendor component names stay unchanged; controller representations are not merged by name.
+3. Check that the failed physical drive and associated alarms still have their actual fault state. A retained fault on an absent component must not be cleared or unacknowledged merely because its reading is unavailable.
+4. Compare unknown rows for active components and query failures separately; they must remain **Not fully assessable** when no positive exclusion evidence exists. No deliberate hardware fault is required for acceptance.
+
+## Build 0033 manual email replay (pending NAS acceptance)
+
+1. Upgrade to build 0033 and open Events as a DSM administrator. Select a recorded alarm, recovery or hardware log, including an acknowledged alarm. Viewers must not have the resend action.
+2. Save the intended SMTP template, reopen the event's resend dialog and select exactly the alarm-server recipient. Verify the preview retains the original event ID/time and has no automatic TEST label.
+3. Explicitly request one submission. Compare the received subject/body and parser behavior with the preview and inspect the separate manual history. Original delivery status, event count, raw alarm health and acknowledgement must remain unchanged.
+4. If another copy is needed, create a new preview and submit it. Confirm a new Message-ID while the original event ID/time remain the same. The alarm server may still deduplicate using those original fields.
+5. Compare SMTP failure/cancellation indicators and stored history after application restart. This build was checked against loopback SMTP and a synthetic browser fixture; no production alarm server was contacted during implementation.
+
+## Build 0032 HPE SmartStorage (pending NAS acceptance)
+
+1. Upgrade to build 0032 and wait for a fresh completed iLO poll. The authorized development collector verified the live hierarchy; installation on DSM has not yet been confirmed.
+2. Compare the physical disk rows and locations with iLO. If the observed fault is unchanged, disk `1I:1:1` must be Critical and disk `1I:1:2` OK. The device must show Critical rather than only the parent Warning.
+3. Inspect the failed drive's associated summaries: System, Chassis, SmartStorage, array controller and logical drive. Their raw reported Warning states remain inspectable, while notifications are grouped to the concrete drive fault. Existing event history remains intact.
+4. Verify that unrelated hardware alarms still appear separately. No deliberate hardware failure is required. If an operator acknowledges an already verified fault, the resulting derived status must not conceal another newly observed disk or controller fault.
+
 ## Build 0031 optional uninstall cleanup (pending NAS acceptance)
 
 Use a disposable test installation/dataset, with an encrypted app backup downloaded first if its contents need to be retained. No automated agent-side NAS uninstall is part of local validation.

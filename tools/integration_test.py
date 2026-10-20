@@ -19,6 +19,11 @@ BINARY = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "target/de
 VERSION = subprocess.check_output([str(BINARY), "--version"], text=True).strip().split()[-1]
 state = {"storage_failures": 0, "storage_forced_status": 0, "fan_state": "Enabled", "health": "Critical", "storage": True, "log": "old", "redirect": False, "reject": False}
 requests = []
+HPE_STORAGE = {item['uri']: item['body'] for item in json.loads((ROOT/'tests/fixtures/hpe-smartstorage-hierarchy.json').read_text())['resources']}
+HPE_APPLICABILITY = {item['uri']: item['body'] for item in json.loads((ROOT/'tests/fixtures/hpe-applicability.json').read_text())['resources']}
+HPE_CONTROLLER = '/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/'
+HPE_FAILED = HPE_CONTROLLER + 'DiskDrives/0/'
+state['hpe_storage'] = False
 SESSION_TOKEN = 'synthetic-standard-session-token'
 state.update(sessions=False, session_active=False, session_posts=0, session_deletes=0, session_redirect=False, session_collection='/redfish/v1/Sessions', session_location='/redfish/v1/Sessions/owned')
 
@@ -58,6 +63,20 @@ class Mock(BaseHTTPRequestHandler):
             self.send_error(state["storage_forced_status"] or 500); return
         if not state["storage"] and self.path.endswith("/Storage"):
             self.send_error(403); return
+        if state['hpe_storage']:
+            data.update(HPE_STORAGE)
+            data['/redfish/v1/root/'] = {'Systems': {'@odata.id': '/redfish/v1/Systems/'}, 'Chassis': {'@odata.id': '/redfish/v1/Chassis/'}}
+            # The selected fixture excludes unrelated inventories.
+            data['/redfish/v1/Systems/1/'] = json.loads(json.dumps(data['/redfish/v1/Systems/1/']))
+            for name in ['Storage', 'LogServices']:
+                data['/redfish/v1/Systems/1/'].pop(name, None)
+            data['/redfish/v1/Chassis/1/'] = json.loads(json.dumps(data['/redfish/v1/Chassis/1/']))
+            for name in ['Thermal', 'Power']:
+                data['/redfish/v1/Chassis/1/'].pop(name, None)
+            data.update(HPE_APPLICABILITY)
+            data['/redfish/v1/Systems/1/']['Storage'] = {'@odata.id': '/redfish/v1/Systems/1/Storage/'}
+            for name in ['Thermal','Power']:
+                data['/redfish/v1/Chassis/1/'][name] = {'@odata.id': f'/redfish/v1/Chassis/1/{name}/'}
         if self.path not in data:
             self.send_error(404); return
         if state['sessions'] and self.path == '/redfish/v1/root/':
@@ -205,6 +224,32 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         (temp/"private/master.key").rename(temp/"saved.key")
         run("snapshot", success=False)
         (temp/"saved.key").rename(temp/"private/master.key")
+        # Exercise the real HTTPS walker, persistence and derived assessment on
+        # the sanitized HPE hierarchy, including both physical and DataDrives links.
+        state['hpe_storage'] = True
+        state['sessions'] = True
+        before_logout = state['session_deletes']
+        requests.clear()
+        run('poll-once')
+        hpe = snapshot()['devices'][0]
+        assert hpe['overall_status'] == 'critical'
+        assert all(c['outcome'] == 'available' for c in hpe['snapshot']['capabilities']), hpe['snapshot']['capabilities']
+        assert HPE_FAILED in requests
+        assert HPE_CONTROLLER + 'LogicalDrives/1/DataDrives/' in requests
+        failed = next(o for o in hpe['snapshot']['observations'] if o['key'] == HPE_FAILED)
+        assert failed['health'] == 'critical' and '1I:1:1' in failed['label']
+        exclusions=hpe['snapshot']['assessment_exclusions']
+        assert len(exclusions)==28
+        assert list(exclusions.values()).count('absent')==23
+        assert list(exclusions.values()).count('empty_controller')==4
+        assert list(exclusions.values()).count('informational')==1
+        assert HPE_FAILED not in exclusions
+        assert all(o['key'] in exclusions for o in hpe['snapshot']['observations'] if o['health']=='unknown')
+        for parent in ['/redfish/v1/Systems/1/', '/redfish/v1/Chassis/1/', '/redfish/v1/Systems/1/SmartStorage/', HPE_CONTROLLER, HPE_CONTROLLER + 'LogicalDrives/1/']:
+            assert hpe['alarm_statuses'][parent]['derived']
+            assert HPE_FAILED in hpe['alarm_statuses'][parent]['causes']
+        assert not state['session_active'] and state['session_deletes'] == before_logout + 1
+        state['hpe_storage'] = state['sessions'] = False
         run("service", "start")
         run("service", "status")
         with socket.socket(socket.AF_UNIX) as client:

@@ -554,6 +554,107 @@ impl Store {
 mod tests {
     use super::*;
     #[test]
+    fn absent_sensor_exclusion_never_clears_a_retained_fault_or_its_acknowledgement() {
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        let mut snap = snapshot(Health::Critical, Health::Ok);
+        s.apply(&d, &snap, now).unwrap();
+        let event_count = s.event_entries(-1).unwrap().len();
+        snap.observations
+            .iter_mut()
+            .find(|o| o.key == "fan")
+            .unwrap()
+            .health = Health::Unknown;
+        snap.assessment_exclusions
+            .insert("fan".into(), AssessmentExclusion::Absent);
+        s.apply(&d, &snap, now + 1).unwrap();
+        assert_eq!(assessment(&s, &d, "fan").status, "critical");
+        assert_eq!(s.event_entries(-1).unwrap().len(), event_count);
+        ack(&mut s, &d, "fan", true, now + 1);
+        s.apply(&d, &snap, now + 2).unwrap();
+        assert_eq!(assessment(&s, &d, "fan").status, "acknowledged");
+        quiet(&s, now + 2);
+    }
+    #[test]
+    fn replaying_an_acknowledged_event_does_not_change_alarm_acknowledgement_or_original_delivery()
+    {
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        s.apply(&d, &snapshot(Health::Critical, Health::Ok), now)
+            .unwrap();
+        ack(&mut s, &d, "fan", true, now);
+        let events = s.event_entries(-1).unwrap();
+        let id = events.iter().find(|e| e["key"] == "fan").unwrap()["id"]
+            .as_i64()
+            .unwrap();
+        let before = s.dashboard().unwrap()["devices"].clone();
+        let p = s
+            .preview_mail_replay(id, "first@example.invalid", "admin", now + 1)
+            .unwrap();
+        s.enqueue_mail_replay(p["id"].as_str().unwrap(), "admin", now + 1)
+            .unwrap();
+        let job = s.pending_mail_replay(now + 1).unwrap().unwrap();
+        s.finish_mail_replay(&job, None, now + 2).unwrap();
+        assert_eq!(s.dashboard().unwrap()["devices"], before);
+        assert_eq!(s.event_entries(-1).unwrap(), events);
+        assert_eq!(assessment(&s, &d, "fan").status, "acknowledged");
+        quiet(&s, now + 2);
+    }
+    #[test]
+    fn hpe_drive_acknowledgement_groups_summaries_but_not_new_drives_or_controller_faults() {
+        use crate::correlation::tests::{hpe_fixture, HPE_FAILED, HPE_OK, HPE_SUMMARIES};
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        let mut snap = hpe_fixture();
+        s.apply(&d, &snap, now).unwrap();
+        assert_eq!(
+            s.dashboard().unwrap()["devices"][0]["overall_status"],
+            "critical"
+        );
+        assert_eq!(
+            s.pending_mail(now).unwrap().unwrap().event.resource,
+            HPE_FAILED
+        );
+        for parent in HPE_SUMMARIES {
+            assert!(assessment(&s, &d, parent).derived);
+        }
+        ack(&mut s, &d, HPE_FAILED, true, now);
+        quiet(&s, now);
+        for parent in HPE_SUMMARIES {
+            assert_eq!(assessment(&s, &d, parent).status, "acknowledged");
+        }
+        snap.observations
+            .iter_mut()
+            .find(|o| o.key == HPE_OK)
+            .unwrap()
+            .health = Health::Critical;
+        snap.resources.get_mut(HPE_OK).unwrap().own_health = Some(Health::Critical);
+        s.apply(&d, &snap, now + 1).unwrap();
+        assert_eq!(assessment(&s, &d, HPE_FAILED).status, "acknowledged");
+        assert_eq!(assessment(&s, &d, HPE_OK).status, "critical");
+        assert_eq!(
+            s.pending_mail(now + 1).unwrap().unwrap().event.resource,
+            HPE_OK
+        );
+        for parent in HPE_SUMMARIES {
+            assert_eq!(assessment(&s, &d, parent).status, "critical");
+        }
+        ack(&mut s, &d, HPE_OK, true, now + 1);
+        quiet(&s, now + 1);
+        let controller = HPE_SUMMARIES[3];
+        snap.resources
+            .get_mut(controller)
+            .unwrap()
+            .independent_condition = true;
+        s.apply(&d, &snap, now + 2).unwrap();
+        assert_eq!(assessment(&s, &d, controller).status, "warning");
+        assert!(!assessment(&s, &d, controller).derived);
+        assert_eq!(
+            s.pending_mail(now + 2).unwrap().unwrap().event.resource,
+            controller
+        );
+    }
+    #[test]
     fn migrated_psu_acknowledged_while_off_stays_acknowledged_when_powered_on() {
         use crate::correlation::tests::{PSU, SUBSYSTEM, SYSTEM};
         let (_dir, mut s, d) = setup();

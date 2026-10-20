@@ -15,15 +15,24 @@ test('persisted faults retain severity until stale',()=>{let d=device();d.alarms
 
 test('disabled functions, proven empty controllers and pure power measurements are neutral',()=>{
  const d=device();
- d.snapshot.assessment_exclusions={redundancy:'disabled',storage:'empty_controller',controller:'empty_controller',power:'informational'};
+ d.snapshot.assessment_exclusions={redundancy:'disabled',storage:'empty_controller',controller:'empty_controller',power:'informational',fan:'absent'};
+ d.snapshot.observations[0].key='healthy';
  for(const key of Object.keys(d.snapshot.assessment_exclusions))d.snapshot.observations.push({key,health:'unknown'});
  assert.equal(overall(d),'ok');
  for(const o of d.snapshot.observations.slice(1)){
   assert.equal(observationStatus(o,d.snapshot),'not_applicable');
-  assert.equal(observationLabel(o,d.snapshot),'Nicht relevant');
+  assert.equal(observationLabel(o,d.snapshot),({redundancy:'Deaktiviert',storage:'Controller ohne Laufwerke',controller:'Controller ohne Laufwerke',power:'Information',fan:'Nicht vorhanden'})[o.key]);
   assert.ok(assessmentReason(o,d.snapshot));
  }
  d.snapshot.observations.push({key:'unassessed-disk',health:'unknown'});assert.equal(overall(d),'unknown');
+});
+test('absent placeholders stay neutral but retained incident assessment and faults win',()=>{
+ const d=device(),o={key:'absent-fan',health:'unknown',reading:null};
+ d.snapshot.observations.push(o);d.snapshot.assessment_exclusions={[o.key]:'absent'};
+ assert.equal(overall(d),'ok');assert.equal(observationLabel(o,d.snapshot,d),'Nicht vorhanden');
+ d.alarms=[{key:o.key,health:'critical'}];d.alarm_statuses={[o.key]:{status:'critical'}};
+ assert.equal(overall(d),'critical');assert.equal(observationLabel(o,d.snapshot,d),'Kritisch');
+ for(const health of ['warning','critical']){o.health=health;assert.equal(assessmentReason(o,d.snapshot),'');}
 });
 test('neutral rows cannot suppress faults, stale readings or missing coverage',()=>{
  const d=device();const o={key:'controller',health:'unknown'};

@@ -17,3 +17,7 @@ Preview and test email use current editor values. The test sends only to the fir
 Each recipient has a durable message ID/status. Transient errors receive bounded retries; permanent rejections stop automatic retries. An externally accepted message cannot be recalled, and SMTP acceptance is not proof of inbox delivery. The user confirms Gmail test and automatic reminder delivery. Plaintext was locally tested. OAuth, HTML templates and arbitrary attachments are not implemented.
 
 Reference: [lettre 0.11.23](https://docs.rs/lettre/0.11.23/lettre/). See [Notifications](NOTIFICATIONS.md) and [Validation](VALIDATION.md).
+
+## Manual event replay
+
+Administrators can select **Events → Resend email …** to preview and send one recorded event to one saved recipient using the current saved template. This explicit action works independently of automatic delivery filters and preserves the original alarm/event state and delivery history. No TEST marker is inserted. Each intentional job has a new Message-ID; its technical retries keep that ID and frozen content. See [Manual email replay](MAIL-REPLAY.md) for duplicate handling, history and cancellation rules.

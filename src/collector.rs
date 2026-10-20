@@ -137,6 +137,22 @@ pub(crate) const LINK_KEYS: &[&str] = &[
     "DiskDrives",
     "LogicalDrives",
     "StorageControllers",
+    "PhysicalDrives",
+    "DataDrives",
+    "StorageEnclosures",
+    "UnconfiguredDrives",
+];
+
+// Only inventory dependencies, never OEM configuration or action targets.
+pub(crate) const HPE_STORAGE_LINK_KEYS: &[&str] = &[
+    "SmartStorage",
+    "ArrayControllers",
+    "DiskDrives",
+    "PhysicalDrives",
+    "LogicalDrives",
+    "DataDrives",
+    "StorageEnclosures",
+    "UnconfiguredDrives",
 ];
 
 pub struct Redfish {
@@ -817,19 +833,19 @@ fn discover(value: &Value, queue: &mut VecDeque<String>) {
             queue.push_back(path.into());
         }
     }
-    // HPE OEM discovery without fixed system IDs or paths to writable configuration resources.
-    if let Some(hpe) = value.pointer("/Oem/Hpe") {
-        for key in ["Links", "SmartStorage"] {
-            if let Some(v) = hpe.get(key) {
+    // Keep OEM polling and fault dependencies on the same explicit inventory links.
+    for links in [
+        value.get("Links"),
+        value.pointer("/Oem/Hpe"),
+        value.pointer("/Oem/Hpe/Links"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for key in HPE_STORAGE_LINK_KEYS {
+            if let Some(v) = links.get(*key) {
                 add_links(v, queue);
                 discover(v, queue);
-            }
-        }
-    }
-    if let Some(links) = value.get("Links") {
-        for key in ["DiskDrives", "LogicalDrives", "ArrayControllers"] {
-            if let Some(v) = links.get(key) {
-                add_links(v, queue);
             }
         }
     }
@@ -1006,7 +1022,26 @@ pub(crate) fn normalize(
                         .is_some_and(|kind| {
                             kind.contains("ComputerSystem.") || kind.contains("Chassis.")
                         });
-                    let name = if aggregate {
+                    let name = if value
+                        .get("@odata.type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| {
+                            kind.rsplit('.').next() == Some("HpeSmartStorageDiskDrive")
+                        }) {
+                        let location = value
+                            .get("Location")
+                            .and_then(Value::as_str)
+                            .filter(|location| !location.trim().is_empty())
+                            .map(|location| {
+                                location
+                                    .chars()
+                                    .filter(|c| !c.is_control())
+                                    .take(80)
+                                    .collect::<String>()
+                            });
+                        location
+                            .map_or_else(|| name.clone(), |location| format!("{name} ({location})"))
+                    } else if aggregate {
                         format!("{name} – Gesamtgesundheit")
                     } else {
                         name
@@ -1122,6 +1157,60 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn live_hpe_links_reach_physical_drives_even_through_logical_drive_membership() {
+        use crate::correlation::tests::{HPE_FAILED, HPE_OK};
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hpe-smartstorage-hierarchy.json"
+        ))
+        .unwrap();
+        for through_logical_drive in [false, true] {
+            let mut bodies = BTreeMap::new();
+            for item in fixture["resources"].as_array().unwrap() {
+                let mut body = item["body"].clone();
+                if through_logical_drive {
+                    if let Some(links) = body.get_mut("Links").and_then(Value::as_object_mut) {
+                        links.remove("PhysicalDrives");
+                    }
+                }
+                bodies.insert(item["uri"].as_str().unwrap().to_owned(), body);
+            }
+            let mut queue = VecDeque::from([
+                "/redfish/v1/Systems/".to_owned(),
+                "/redfish/v1/Chassis/".to_owned(),
+            ]);
+            let mut visited = HashSet::new();
+            let mut observations = BTreeMap::new();
+            let mut logs = Vec::new();
+            while let Some(uri) = queue.pop_front() {
+                if !visited.insert(uri.clone()) {
+                    continue;
+                }
+                // Other system inventories are outside this selected storage fixture.
+                if let Some(body) = bodies.get(&uri) {
+                    discover(body, &mut queue);
+                    normalize(&uri, body, &mut observations, &mut logs);
+                }
+            }
+            assert_eq!(observations[HPE_FAILED].health, Health::Critical);
+            assert_eq!(observations[HPE_OK].health, Health::Ok);
+            for suffix in [
+                "LogicalDrives/1/DataDrives/",
+                "StorageEnclosures/0/",
+                "StorageEnclosures/1/",
+                "UnconfiguredDrives/",
+            ] {
+                assert!(visited.iter().any(|uri| uri.ends_with(suffix)), "{suffix}");
+            }
+            assert!(logs.is_empty());
+        }
+        let mut queue = VecDeque::new();
+        discover(
+            &json!({"Oem":{"Hpe":{"Links":{"Settings":{"@odata.id":"/redfish/v1/Systems/1/Settings/"},"Reset":{"target":"/redfish/v1/Systems/1/Actions/Reset"}}}}}),
+            &mut queue,
+        );
+        assert!(queue.is_empty());
+    }
+    #[test]
     fn live_dell_fragments_are_local_objects_and_are_not_fetched() {
         let fixture: Value =
             serde_json::from_str(include_str!("../tests/fixtures/dell-r340-redfish.json")).unwrap();
@@ -1180,6 +1269,15 @@ mod tests {
         assert_eq!(
             queue,
             VecDeque::from(["/redfish/v1/Systems/42/SmartStorage".to_owned()])
+        );
+        queue.clear();
+        discover(
+            &json!({"Oem":{"Hpe":{"SmartStorage":{"ArrayControllers":{"@odata.id":"/redfish/v1/Systems/42/SmartStorage/ArrayControllers/"}}}}}),
+            &mut queue,
+        );
+        assert_eq!(
+            queue,
+            VecDeque::from(["/redfish/v1/Systems/42/SmartStorage/ArrayControllers/".to_owned()])
         );
     }
     #[test]

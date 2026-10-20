@@ -203,6 +203,36 @@ with tempfile.TemporaryDirectory() as temporary:
             with sqlite3.connect(state / 'monitor.db') as db:
                 desktop=db.execute('SELECT delivered,attempts,error FROM desktop_jobs WHERE event_id=1').fetchone()
             assert desktop[0] is None and desktop[1]>=1 and desktop[2]=='desktop_test_unavailable', desktop
+            # A manual replay is independent of automatic delivery. The actual
+            # daemon sends the frozen preview, one recipient and a stable ID.
+            from email.parser import BytesParser
+            from email.policy import default as email_policy
+            cfg['enabled'] = False
+            replay_subject = '[Hardware Monitor] Critical - Synthetic server'
+            replay_body = 'Literal {{device}} text\nEvent: 1\nOriginal event time: 100\n'
+            replay_id = 'a' * 32
+            with sqlite3.connect(state/'monitor.db') as db:
+                db.execute('UPDATE mail_settings SET config=? WHERE id=1',(json.dumps(cfg),))
+                db.execute("INSERT INTO mail_replay(id,event_id,actor,revision,recipient,subject,body,message_id,state,created,queued,updated) VALUES(?,1,'synthetic-admin',1,?,?,?,?,'queued',100,200,200)",
+                           (replay_id,'receiver@example.invalid',replay_subject,replay_body,'<manual-replay-synthetic@hardwaremonitor.invalid>'))
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with sqlite3.connect(state/'monitor.db') as db:
+                    manual=db.execute('SELECT state,submitted,attempts FROM mail_replay WHERE id=?',(replay_id,)).fetchone()
+                if manual[0]=='submitted': break
+                time.sleep(.1)
+            else: raise AssertionError('manual email was not submitted with automatic mail disabled')
+            assert manual[1] and manual[2]==1
+            assert len(server.messages)==2 and server.messages[-1][0]=='receiver@example.invalid'
+            parsed=BytesParser(policy=email_policy).parsebytes(server.messages[-1][1])
+            assert str(parsed['Subject'])==replay_subject
+            assert parsed['Message-ID']=='<manual-replay-synthetic@hardwaremonitor.invalid>'
+            # Lettre's SMTP DATA framing adds its final CRLF, as for ordinary
+            # event emails. No template value or literal placeholder is changed.
+            assert parsed.get_content().replace('\r\n','\n')==replay_body+'\n'
+            with sqlite3.connect(state/'monitor.db') as db:
+                assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0]==1
+                assert db.execute('SELECT COUNT(*) FROM audit_log WHERE action=?',('mail.replay.result',)).fetchone()[0]==1
         finally:
             daemon.terminate()
             stdout, stderr = daemon.communicate(timeout=5)

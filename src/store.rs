@@ -74,6 +74,7 @@ impl Store {
             DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 10000);
           END;")?;
         crate::acknowledgement::initialize(&conn)?;
+        crate::mail_replay::initialize(&conn)?;
         Ok(Self(conn))
     }
 
@@ -731,6 +732,7 @@ impl Store {
         );
         // Explicitly discard old pending work on ANY change; never mail old local-only history.
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL", [])?;
+        crate::mail_replay::cancel(&tx, crate::now())?;
         tx.execute("INSERT INTO mail_settings(id,config,secret,revision) VALUES(1,?1,?2,?3) ON CONFLICT(id) DO UPDATE SET config=excluded.config,secret=excluded.secret,revision=excluded.revision",params![serde_json::to_string(settings)?,secret,current+1])?;
         tx.execute("INSERT INTO audit_log(actor,action,device,outcome,created) VALUES(?1,'mail.settings','mail','ok',?2)",params![actor,crate::now()])?;
         tx.commit()?;

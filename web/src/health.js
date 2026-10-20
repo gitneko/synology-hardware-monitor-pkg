@@ -20,13 +20,18 @@ export function assessmentReason(observation,snapshot) {
   if (observation.health!=='unknown') return '';
   switch(snapshot?.assessment_exclusions?.[observation.key]) {
     case 'disabled':return t('Deaktiviert');
+    case 'absent':return t('Vom Gerät als nicht vorhanden gemeldet');
     case 'empty_controller':return t('Keine Laufwerke oder Volumes vorhanden');
     case 'informational':return t('Reiner Messwert ohne Zustandsmeldung');
     default:return '';
   }
 }
 export function observationStatus(observation,snapshot,device) {return device?.alarm_statuses?.[observation.key]?.status??( assessmentReason(observation,snapshot)?'not_applicable':observation.health);}
-export function observationLabel(observation,snapshot,device) {const status=observationStatus(observation,snapshot,device);return status==='not_applicable'?t('Nicht relevant'):labels[status];}
+export function observationLabel(observation,snapshot,device) {
+  const status=observationStatus(observation,snapshot,device);
+  if(status!=='not_applicable')return labels[status];
+  return ({absent:t('Nicht vorhanden'),disabled:t('Deaktiviert'),informational:t('Information'),empty_controller:t('Controller ohne Laufwerke')})[snapshot.assessment_exclusions[observation.key]]??t('Nicht relevant');
+}
 export function timestamp(seconds) { return seconds ? new Date(seconds*1000).toLocaleString(dateLocale()) : t("Noch keine Abfrage"); }
 
 export function primaryAlarms(device,filter='all'){return device.alarms.filter(a=>!a.covered_by?.length && matchesAlarm(a,filter));}

@@ -17,6 +17,7 @@ pub fn now() -> i64 {
 pub mod identity;
 
 pub mod mail;
+pub mod mail_replay;
 
 pub mod notification;
 

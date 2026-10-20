@@ -11,6 +11,8 @@ pub struct Resource {
     pub rollup: Option<Health>,
     pub children: BTreeSet<String>,
     #[serde(default)]
+    pub associated_systems: BTreeSet<String>,
+    #[serde(default)]
     pub independent_condition: bool,
     #[serde(default)]
     pub condition_origins: BTreeSet<String>,
@@ -123,6 +125,25 @@ pub fn observe(fallback: &str, value: &Value, resources: &mut BTreeMap<String, R
                 node.children.extend(links(v));
             }
         }
+        if node.kind.starts_with("#Chassis.") {
+            if let Some(v) = rel.get("ComputerSystems") {
+                node.associated_systems.extend(links(v));
+            }
+        }
+    }
+    for rel in [
+        value.get("Links"),
+        value.pointer("/Oem/Hpe"),
+        value.pointer("/Oem/Hpe/Links"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for name in crate::collector::HPE_STORAGE_LINK_KEYS {
+            if let Some(v) = rel.get(*name) {
+                node.children.extend(links(v));
+            }
+        }
     }
     // An explicit fault on this resource, or an unknown fault origin, remains separate.
     if let Some(conditions) = value
@@ -173,6 +194,8 @@ pub fn observe(fallback: &str, value: &Value, resources: &mut BTreeMap<String, R
         .entry(key.into())
         .and_modify(|old| {
             old.children.extend(node.children.clone());
+            old.associated_systems
+                .extend(node.associated_systems.clone());
             if !node.kind.is_empty() {
                 old.kind = node.kind.clone();
                 old.own_health = node.own_health;
@@ -193,6 +216,9 @@ pub(crate) fn summary(resource: &Resource) -> bool {
         "Power",
         "Thermal",
         "Storage",
+        "HpeSmartStorage",
+        "HpeSmartStorageArrayController",
+        "HpeSmartStorageLogicalDrive",
     ]
     .iter()
     .any(|kind| resource.kind.rsplit('.').next() == Some(*kind))
@@ -292,6 +318,9 @@ pub fn canonicalize(
             resources.entry(canonical.clone()).or_insert(old);
         }
         for node in resources.values_mut() {
+            if node.associated_systems.remove(alias) {
+                node.associated_systems.insert(canonical.clone());
+            }
             if node.condition_origins.remove(alias) {
                 node.condition_origins.insert(canonical.clone());
             }
@@ -299,6 +328,37 @@ pub fn canonicalize(
                 node.children.insert(canonical.clone());
             }
         }
+    }
+    // HPE reports SmartStorage on the system, and its warning on the associated
+    // chassis as well. Project only that storage dependency, with reciprocal
+    // association evidence; adding Chassis -> ComputerSystem would form a cycle.
+    let mut storage_dependencies = Vec::new();
+    for (chassis, node) in resources
+        .iter()
+        .filter(|(_, r)| r.kind.starts_with("#Chassis."))
+    {
+        for system in &node.associated_systems {
+            if let Some(system) = resources
+                .get(system)
+                .filter(|r| r.kind.starts_with("#ComputerSystem.") && r.children.contains(chassis))
+            {
+                for child in &system.children {
+                    if resources
+                        .get(child)
+                        .is_some_and(|r| r.kind.rsplit('.').next() == Some("HpeSmartStorage"))
+                    {
+                        storage_dependencies.push((chassis.clone(), child.clone()));
+                    }
+                }
+            }
+        }
+    }
+    for (chassis, storage) in storage_dependencies {
+        resources
+            .get_mut(&chassis)
+            .unwrap()
+            .children
+            .insert(storage);
     }
 }
 
@@ -311,10 +371,27 @@ pub(crate) mod tests {
     pub(crate) const SUBSYSTEM: &str = "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem";
     pub(crate) const PSU: &str =
         "/redfish/v1/Chassis/System.Embedded.1/PowerSubsystem/PowerSupplies/PSU.Slot.1";
+    pub(crate) const HPE_SUMMARIES: [&str; 5] = [
+        "/redfish/v1/Systems/1/",
+        "/redfish/v1/Chassis/1/",
+        "/redfish/v1/Systems/1/SmartStorage/",
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/",
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/LogicalDrives/1/",
+    ];
+    pub(crate) const HPE_FAILED: &str =
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/0/";
+    pub(crate) const HPE_OK: &str =
+        "/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/DiskDrives/1/";
     pub(crate) fn fixture() -> crate::model::Snapshot {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/dell-r340-hierarchy.json"))
-                .unwrap();
+        from_fixture(include_str!("../tests/fixtures/dell-r340-hierarchy.json"))
+    }
+    pub(crate) fn hpe_fixture() -> crate::model::Snapshot {
+        from_fixture(include_str!(
+            "../tests/fixtures/hpe-smartstorage-hierarchy.json"
+        ))
+    }
+    fn from_fixture(raw: &str) -> crate::model::Snapshot {
+        let fixture: Value = serde_json::from_str(raw).unwrap();
         let mut snapshot = crate::model::Snapshot::default();
         let mut observations = BTreeMap::new();
         let mut identities = crate::identity::PsuIdentities::default();
@@ -329,6 +406,98 @@ pub(crate) mod tests {
         canonicalize(&mut snapshot.resources, &snapshot.resource_aliases);
         snapshot.observations = observations.into_values().collect();
         snapshot
+    }
+    #[test]
+    fn hpe_live_storage_hierarchy_groups_to_the_failed_physical_drive_without_cycles() {
+        let snapshot = hpe_fixture();
+        let states = snapshot
+            .observations
+            .iter()
+            .map(|o| (o.key.clone(), o.health))
+            .collect();
+        let grouped = groups(&snapshot.resources, &states);
+        for parent in HPE_SUMMARIES {
+            assert_eq!(grouped[parent], vec![HPE_FAILED]);
+            assert!(!descendants(HPE_FAILED, &snapshot.resources).contains(parent));
+        }
+        assert!(!grouped.contains_key(HPE_FAILED));
+        let drive = snapshot
+            .observations
+            .iter()
+            .find(|o| o.key == HPE_FAILED)
+            .unwrap();
+        assert_eq!(drive.health, Health::Critical);
+        assert!(drive.label.contains("1I:1:1"));
+        assert!(!summary(&snapshot.resources[HPE_FAILED]));
+    }
+    #[test]
+    fn hpe_controller_faults_and_unexplained_or_missing_dependencies_remain_separate() {
+        let mut snapshot = hpe_fixture();
+        let mut states: BTreeMap<_, _> = snapshot
+            .observations
+            .iter()
+            .map(|o| (o.key.clone(), o.health))
+            .collect();
+        let controller = HPE_SUMMARIES[3];
+        snapshot
+            .resources
+            .get_mut(controller)
+            .unwrap()
+            .independent_condition = true;
+        let grouped = groups(&snapshot.resources, &states);
+        assert!(!grouped.contains_key(controller));
+        assert!(grouped[HPE_SUMMARIES[2]].contains(&controller.to_owned()));
+        assert!(grouped[HPE_SUMMARIES[2]].contains(&HPE_FAILED.to_owned()));
+        snapshot
+            .resources
+            .get_mut(controller)
+            .unwrap()
+            .independent_condition = false;
+        snapshot.resources.get_mut(controller).unwrap().rollup = Some(Health::Ok);
+        assert!(!groups(&snapshot.resources, &states).contains_key(controller));
+        snapshot.resources.get_mut(controller).unwrap().rollup = None;
+        states.insert(HPE_FAILED.into(), Health::Unknown);
+        states.insert(HPE_SUMMARIES[4].into(), Health::Unknown);
+        assert!(!groups(&snapshot.resources, &states).contains_key(controller));
+        // A physical drive with links is still a concrete alarm, not a summary.
+        snapshot
+            .resources
+            .get_mut(HPE_FAILED)
+            .unwrap()
+            .children
+            .insert(HPE_OK.into());
+        states.insert(HPE_FAILED.into(), Health::Critical);
+        states.insert(HPE_OK.into(), Health::Critical);
+        assert!(!groups(&snapshot.resources, &states).contains_key(HPE_FAILED));
+    }
+    #[test]
+    fn hpe_chassis_projection_requires_reciprocal_associations_and_keeps_old_snapshots_readable() {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hpe-smartstorage-hierarchy.json"
+        ))
+        .unwrap();
+        for remove_forward in [false, true] {
+            let mut resources = BTreeMap::new();
+            for item in raw["resources"].as_array().unwrap() {
+                let mut body = item["body"].clone();
+                if remove_forward && item["uri"] == HPE_SUMMARIES[0] {
+                    body["Links"].as_object_mut().unwrap().remove("Chassis");
+                } else if !remove_forward && item["uri"] == HPE_SUMMARIES[1] {
+                    body["Links"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("ComputerSystems");
+                }
+                observe(item["uri"].as_str().unwrap(), &body, &mut resources);
+            }
+            canonicalize(&mut resources, &BTreeMap::new());
+            assert!(!descendants(HPE_SUMMARIES[1], &resources).contains(HPE_FAILED));
+        }
+        let legacy: Resource = serde_json::from_value(json!({
+            "kind":"#Chassis.v1_0_0.Chassis", "own_health":"warning", "rollup":null, "children":[]
+        }))
+        .unwrap();
+        assert!(legacy.associated_systems.is_empty());
     }
     #[test]
     fn live_offline_links_correlate_all_summaries_to_one_retained_psu() {
