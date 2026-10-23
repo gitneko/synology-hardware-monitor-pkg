@@ -1,10 +1,10 @@
 # Package architecture
 
-Current implementation: 0.8.0-0030.
+Current implementation: **0.9.0-0056**, local P6 validation plus the [DSM polling profile](SNMP-SYNOLOGY-RESULTS.md); build 0.9.0-0051 installation and DSM profile operation are user-confirmed on 21 October 2026; the remaining SNMP NAS/BMC acceptance matrix stays open in P7.
 
 ## Processes and trust boundaries
 
-One statically linked Rust/Tokio executable provides the daemon, compiled CGI bridge, local maintenance commands and service lifecycle. DSM lifecycle hooks are the small scripts required by the package format. Polling runs in the daemon, without Task Scheduler or loose monitoring scripts. Up to four devices are polled concurrently using read-only Redfish HTTPS GET requests. There is no public daemon TCP API and no SMTP server.
+One statically linked Rust/Tokio executable provides the daemon, compiled CGI bridge, local maintenance commands and service lifecycle. DSM lifecycle hooks are the small scripts required by the package format. Polling runs in the daemon, without Task Scheduler or loose monitoring scripts. Up to four devices are polled concurrently using read-only Redfish HTTPS GET requests or bounded SNMP reads, with one selected primary collector per device. Optional supervised UDP trap reception is separate. There is no public daemon TCP API and no SMTP server.
 
 The Vue 3 application is served through DSM's package web alias. A Vue 2 host launcher opens a DSM 7 desktop window containing a same-origin iframe. Versioned HTML/launcher filenames, hashed assets and positive release timestamps prevent the previously observed stale entrypoint problem.
 
@@ -51,3 +51,26 @@ Build 0030 also follows the standard Storage `Controllers` collection and its ob
 Build 0034 adds a separate `absent` applicability reason for explicitly absent components, unless another observation contradicts absence or reports a fault/condition. Raw health remains Unknown, unavailable readings stay suppressed and retained incidents/acknowledgements are not cleared. Untyped members of a typed Power resource's `PowerControl` array can be informational when they contain a finite consumption value and no Status. Arbitrary watt-reading sensors do not inherit this rule. An omitted Volumes property can additionally be neutral for a healthy Enabled Storage resource with a complete empty Drives array and exclusively SATA-capable linked controllers. Every advertised controller representation must be observed and free of contradictory inventory/status; advertised collections must be complete. Null/advertised-but-unread Volumes, missing controller data, other protocols, pagination, malformed counts and fault conditions keep the conservative behavior. Neutral badges explain absence, information or empty controllers without changing vendor component names.
 
 Build 0037 adds an incident-token/device-revision-bound administrator reset. One immediate transaction removes the chosen alarm/acknowledgement, cancels pending automatic jobs for that canonical resource and records an audit entry. Events, measurements, accepted SMTP records and explicit historical replays remain. The common submission gate prevents the next email/desktop job from starting after the reset. The next confirmed faulty poll creates a new incident. See [Alarm reset](ALARM-RESET.md).
+
+## SNMP development foundation (P1–P5)
+
+The development branch now has explicit protocol configuration, purpose-separated encrypted SNMP credentials, transactional schema-2 upgrade with private pre-migration backup, and archive format 5 with conversion from formats 1–4. The collector dispatcher preserves Redfish behavior and invokes the bounded SNMP read adapter for an SNMP primary. P2 includes purpose-correct decryption, explicit v1/v2c/v3 authPriv, a per-poll UDP transport and typed numeric manufacturer/ENTITY profiles; CLI and API tests use actual system reads. P3 adds supervised configurable UDP reception, fresh saved-target authPriv enrollment, exact source/engine/user/context association, fair bounded verification/ingestion, diagnostic receipt retention and coalesced confirming primary polls. Logical restore shares the receiver ingestion gate; queued work checks revision/epoch. The persisted local engine is shared across rebinds. P4 shares the transactional alarm reducer between full polls and trusted partial updates, with durable per-device sequence barriers, current inventory proof, provisional/confirmed evidence and default-off event-only trap selection. Trap ingestion shares the API/SMTP submission gate and preserves the measurement snapshot/log baseline. Only fresh covering primary input resolves a fault. P5 exposes protocol-specific editing, independent credential actions, explicit sender review, receiver configuration/receipts and bilingual provenance through the existing authenticated CGI operations. Local binding and cryptographic verification are shown separately from poll freshness and controller reachability. See [P5 UI evidence](SNMP-P5-RESULTS.md) and [P4 evidence and limits](SNMP-P4-RESULTS.md). See [P3 reception and evidence](SNMP-P3-RESULTS.md). See [P1 implementation and verification](SNMP-P1-RESULTS.md) and [P2 polling evidence](SNMP-P2-RESULTS.md).
+
+
+`src/snmp/ups.rs` owns RFC 1628, APC PowerNet and Eaton xUPS numeric polling
+contracts and normalization. Scalars are strictly typed; optional telemetry and
+phase tables are informational. RFC/xUPS alarm walks read the alarm count twice
+and validate row/descriptor consistency before an empty table can assert health.
+Alarm summaries carry sorted condition OIDs (APC: documented flag positions), not
+recyclable alarm row indices, in the shared acknowledgement fingerprint. These
+profiles add no SNMP write path or vendor trap mapping.
+
+
+Package state initialization is explicit in `postinst` (install/upgrade/repair),
+using the same `initialize` CLI path as ordinary startup. A schema-1 backup is
+synced and published before transactional schema-2 DDL. Startup database
+contention has a 30-second busy timeout; normal database operations retain five
+seconds. Service readiness allows 120 seconds, requires an actual socket
+connection and is published after listener/shutdown-handler setup. DSM stopped
+and unknown status codes are 3 and 4 respectively. These paths are covered by
+native and static direct-upgrade regressions, separately from NAS acceptance.

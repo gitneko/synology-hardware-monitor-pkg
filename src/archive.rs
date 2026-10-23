@@ -1,5 +1,5 @@
 //! Versioned encrypted logical archive. Never execute SQL or filesystem paths from a backup.
-use crate::{dsm::BoundaryError, store::Store, vault::Vault};
+use crate::{dsm::BoundaryError, model::PrimaryProtocol, store::Store, vault::Vault};
 use aes_gcm::{
     aead::{Aead, Payload},
     Aes256Gcm, KeyInit, Nonce,
@@ -33,6 +33,17 @@ const TABLES: &[(&str,&str)]=&[
     ("desktop_jobs","event_id,recipient,revision,delivered,attempts,next_try,error,cancelled"),
     ("audit_log","id,actor,action,device,outcome,created"),
 ];
+const FORMAT: u32 = 5;
+fn table_specs() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    TABLES.iter().chain(crate::snmp::persistence::TABLES.iter())
+}
+fn purpose(value: &str) -> Result<crate::snmp::secrets::Purpose> {
+    match value {
+        "snmp_poll" => Ok(crate::snmp::secrets::Purpose::SnmpPoll),
+        "snmp_traps" => Ok(crate::snmp::secrets::Purpose::SnmpTraps),
+        _ => anyhow::bail!("unknown protocol credential purpose"),
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", deny_unknown_fields)]
 enum Cell {
@@ -68,6 +79,26 @@ pub struct Archive {
     tables: BTreeMap<String, Vec<Vec<Cell>>>,
 }
 impl Archive {
+    fn validate_layout(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.format == FORMAT && self.tables.len() == table_specs().count(),
+            "version/tables"
+        );
+        for (table, columns) in table_specs() {
+            let rows = self.tables.get(*table).context("missing table")?;
+            anyhow::ensure!(
+                rows.iter()
+                    .flatten()
+                    .all(|cell| !matches!(cell,Cell::Integer(n) if *n<0 || *n>i64::MAX/4)),
+                "integer bounds"
+            );
+            anyhow::ensure!(
+                rows.iter().all(|r| r.len() == columns.split(',').count()),
+                "columns"
+            );
+        }
+        Ok(())
+    }
     pub fn summary(&self) -> serde_json::Value {
         serde_json::json!({"version":self.version,"created":self.created,"devices":self.tables["devices"].len(),"events":self.tables["events"].len(),"alarms":self.tables["alarm_state"].len()})
     }
@@ -163,23 +194,29 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
             archive.tables.insert("mail_replay".into(), Vec::new());
             archive.format = 4;
         }
-        anyhow::ensure!(
-            archive.format == 4 && archive.tables.len() == TABLES.len(),
-            "version/tables"
-        );
-        for (table, columns) in TABLES {
-            let rows = archive.tables.get(*table).context("missing table")?;
+        if archive.format == 4 {
             anyhow::ensure!(
-                rows.iter()
-                    .flatten()
-                    .all(|cell| !matches!(cell,Cell::Integer(n) if *n<0 || *n>i64::MAX/4)),
-                "integer bounds"
+                archive.tables.len() == TABLES.len()
+                    && TABLES.iter().all(|(t, _)| archive.tables.contains_key(*t)),
+                "legacy SNMP tables"
             );
-            anyhow::ensure!(
-                rows.iter().all(|r| r.len() == columns.split(',').count()),
-                "columns"
-            );
+            for (table, _) in crate::snmp::persistence::TABLES {
+                archive.tables.insert((*table).into(), Vec::new());
+            }
+            archive
+                .tables
+                .get_mut("snmp_receiver_settings")
+                .unwrap()
+                .push(vec![
+                    Cell::Integer(1),
+                    Cell::Text(serde_json::to_string(
+                        &crate::snmp::config::ReceiverSettings::default(),
+                    )?),
+                    Cell::Integer(0),
+                ]);
+            archive.format = FORMAT;
         }
+        archive.validate_layout()?;
         Ok(archive)
     };
     result().context(BoundaryError("backup_invalid"))
@@ -190,7 +227,7 @@ impl Store {
         let mut tables = BTreeMap::new();
         let mut size = 0usize;
         // Caller holds the store mutex, so no application writer can interleave.
-        for (table, columns) in TABLES {
+        for (table, columns) in table_specs() {
             let mut q = tx.prepare(&format!("SELECT {columns} FROM {table}"))?;
             let mut query = q.query([])?;
             let mut rows = Vec::new();
@@ -211,12 +248,18 @@ impl Store {
                     anyhow::ensure!(size <= MAX_PLAIN, BoundaryError("backup_too_large"));
                     cells.push(value);
                 }
-                if *table == "devices" || *table == "mail_settings" {
+                if *table == "devices" || *table == "mail_settings" || *table == "protocol_secrets"
+                {
                     let id = if *table == "devices" {
                         match &cells[0] {
                             Cell::Text(s) => s.clone(),
                             _ => anyhow::bail!("device ID"),
                         }
+                    } else if *table == "protocol_secrets" {
+                        let (Cell::Text(id), Cell::Text(p)) = (&cells[0], &cells[1]) else {
+                            anyhow::bail!("protocol identity")
+                        };
+                        purpose(p)?.aad(id)
                     } else {
                         "settings:smtp".to_owned()
                     };
@@ -250,7 +293,7 @@ impl Store {
         }
         tx.commit()?;
         Ok(Archive {
-            format: 4,
+            format: FORMAT,
             version: env!("CARGO_PKG_VERSION").into(),
             created: crate::now(),
             tables,
@@ -270,6 +313,7 @@ impl Store {
         actor: &str,
         expected_audit: i64,
     ) -> Result<()> {
+        archive.validate_layout()?;
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -292,6 +336,14 @@ impl Store {
             tx.query_row("SELECT COALESCE(MAX(revision),0) FROM devices", [], |r| {
                 r.get(0)
             })?;
+        let receiver_revision: i64 = tx.query_row(
+            "SELECT revision FROM snmp_receiver_settings WHERE id=1",
+            [],
+            |r| r.get(0),
+        )?;
+        for (table, _) in crate::snmp::persistence::TABLES.iter().rev() {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
         for table in [
             "mail_replay",
             "mail_recipient",
@@ -308,7 +360,7 @@ impl Store {
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
-        for (table, columns) in TABLES {
+        for (table, columns) in table_specs() {
             let marks = vec!["?"; columns.split(',').count()].join(",");
             let sql = if *table == "audit_log" {
                 "INSERT INTO audit_log(actor,action,device,outcome,created) SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM audit_log WHERE actor=?1 AND action=?2 AND device=?3 AND outcome=?4 AND created=?5)".into()
@@ -318,18 +370,24 @@ impl Store {
             let mut statement = tx.prepare(&sql)?;
             for row in &archive.tables[*table] {
                 let mut values = row.iter().map(Cell::sql).collect::<Result<Vec<_>>>()?;
-                if *table == "devices" || *table == "mail_settings" {
+                if *table == "devices" || *table == "mail_settings" || *table == "protocol_secrets"
+                {
                     let id = if *table == "devices" {
                         match &values[0] {
-                            Value::Text(s) => s.as_str(),
+                            Value::Text(s) => s.clone(),
                             _ => anyhow::bail!("device ID"),
                         }
+                    } else if *table == "protocol_secrets" {
+                        let (Value::Text(id), Value::Text(p)) = (&values[0], &values[1]) else {
+                            anyhow::bail!("protocol identity")
+                        };
+                        purpose(p)?.aad(id)
                     } else {
-                        "settings:smtp"
+                        "settings:smtp".to_owned()
                     };
                     if let Value::Blob(secret) = &values[2] {
                         if !secret.is_empty() {
-                            let sealed = vault.seal(id, secret)?;
+                            let sealed = vault.seal(&id, secret)?;
                             if let Value::Blob(old) = &mut values[2] {
                                 old.zeroize();
                             }
@@ -432,12 +490,21 @@ impl Store {
                     d.id == id && d.ca_file.is_none() && old_revision >= 0,
                     "invalid restored device"
                 );
-                let plain = vault.unseal(&d.id, &secret)?;
-                anyhow::ensure!(
-                    !plain.is_empty() && plain.len() <= 4096 && std::str::from_utf8(&plain).is_ok(),
-                    "device secret"
-                );
+                if d.primary_protocol == PrimaryProtocol::Redfish {
+                    let plain = vault.unseal(&d.id, &secret)?;
+                    anyhow::ensure!(
+                        !plain.is_empty()
+                            && plain.len() <= 4096
+                            && std::str::from_utf8(&plain).is_ok(),
+                        "device secret"
+                    );
+                } else {
+                    anyhow::ensure!(secret.is_empty(), "SNMP device has Redfish password");
+                }
                 d.enabled = false;
+                if let Some(traps) = &mut d.snmp_traps {
+                    traps.enabled = false;
+                }
                 devices.push((d, old_revision));
             }
         }
@@ -450,6 +517,53 @@ impl Store {
                 "UPDATE devices SET config=?2,revision=?3 WHERE id=?1",
                 params![d.id, serde_json::to_string(&d)?, next],
             )?;
+        }
+        {
+            let mut q=tx.prepare("SELECT s.device,s.purpose,s.secret,s.revision,d.config,d.revision FROM protocol_secrets s JOIN devices d ON d.id=s.device")?;
+            for row in q.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })? {
+                let (id, p, secret, revision, raw, device_revision) = row?;
+                anyhow::ensure!(
+                    (0..=device_revision).contains(&revision)
+                        && (28..=8192).contains(&secret.len()),
+                    "protocol secret revision/size"
+                );
+                let p = purpose(&p)?;
+                let device: crate::model::Device = serde_json::from_str(&raw)?;
+                let security = crate::snmp::persistence::security(&device, p)
+                    .context("protocol config missing")?;
+                let plain = vault.unseal(&p.aad(&id), &secret)?;
+                serde_json::from_slice::<crate::snmp::secrets::Credentials>(&plain)?
+                    .validate(security)?;
+            }
+            let (raw, rev): (String, i64) = tx.query_row(
+                "SELECT config,revision FROM snmp_receiver_settings WHERE id=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let mut receiver: crate::snmp::config::ReceiverSettings = serde_json::from_str(&raw)?;
+            receiver.validate()?;
+            receiver.enabled = false;
+            tx.execute(
+                "UPDATE snmp_receiver_settings SET config=?1,revision=?2 WHERE id=1",
+                params![
+                    serde_json::to_string(&receiver)?,
+                    receiver_revision
+                        .max(rev)
+                        .checked_add(1)
+                        .context("receiver revision overflow")?
+                ],
+            )?;
+            crate::snmp::records::validate_restored(&tx)?;
+            crate::snmp::persistence::invalidate(&tx)?;
         }
         {
             let mut q = tx.prepare("SELECT id,config,secret,revision FROM mail_settings")?;
@@ -589,7 +703,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, FORMAT);
         let mut t = Store::open(target.path()).unwrap();
         t.restore_archive(&decoded, &v2, "target-admin", 0).unwrap();
         assert!(t.pending_mail_replay(crate::now()).unwrap().is_none());
@@ -600,6 +714,9 @@ mod tests {
             .any(|j| j["state"] == "submitted" && j["message_id"] == job.message_id));
         assert!(history.iter().any(|j| j["state"] == "cancelled"));
         let mut old = archive;
+        for (table, _) in crate::snmp::persistence::TABLES {
+            old.tables.remove(*table);
+        }
         old.format = 3;
         old.tables.remove("mail_replay");
         let decoded = decrypt(
@@ -607,7 +724,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, FORMAT);
         assert!(decoded.tables["mail_replay"].is_empty());
     }
     #[test]
@@ -666,6 +783,9 @@ mod tests {
         assert_eq!(status["acknowledgement"]["reason"], "Known damaged input");
         assert_ne!(status["token"], token);
         let mut legacy = s.make_archive(&v1).unwrap();
+        for (table, _) in crate::snmp::persistence::TABLES {
+            legacy.tables.remove(*table);
+        }
         legacy.format = 2;
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
@@ -674,7 +794,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, FORMAT);
         assert!(decoded.tables["alarm_control"].is_empty());
         let cursor = t.audit_cursor().unwrap();
         t.restore_archive(&decoded, &v2, "target-admin", cursor)
@@ -695,6 +815,9 @@ mod tests {
     }
     fn device() -> crate::model::Device {
         crate::model::Device {
+            primary_protocol: Default::default(),
+            snmp_poll: None,
+            snmp_traps: None,
             id: "backup-test".into(),
             name: "Backup-Test".into(),
             endpoint: "https://bmc.example/".into(),
@@ -765,6 +888,9 @@ mod tests {
         corrupt[last] ^= 1;
         assert!(decrypt(&STANDARD.encode(corrupt), "a sufficiently long password").is_err());
         let mut legacy = decrypt(&file, "a sufficiently long password").unwrap();
+        for (table, _) in crate::snmp::persistence::TABLES {
+            legacy.tables.remove(*table);
+        }
         legacy.format = 1;
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
@@ -782,7 +908,7 @@ mod tests {
         }
         let old_file = encrypt(&legacy, "a sufficiently long password").unwrap();
         let decoded = decrypt(&old_file, "a sufficiently long password").unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, FORMAT);
         assert!(matches!(
             decoded.tables["events"][0].last(),
             Some(Cell::Null)

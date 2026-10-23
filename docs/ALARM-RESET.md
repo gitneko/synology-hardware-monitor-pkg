@@ -6,7 +6,7 @@ Choose the incident, select **Reset stored alarm ...**, review the dialog and pr
 
 ## What changes
 
-- Only that resource's stored alarm state and its acknowledgement are removed.
+- Only that resource's stored alarm state, its acknowledgement and its current trap-derived evidence are removed. Historical trap receipts remain; an old provisional trap cannot recreate the incident merely because a later poll is unknown.
 - Current measurements, applicability reasons, device settings and monitoring remain unchanged. An absent PSU stays **Not present**, without inventing an OK reading.
 - Existing event rows, timestamps, messages, SMTP recipient acceptance records and hardware logs are retained. The operator, resource and time are recorded in the audit log as an alarm reset.
 - Pending automatic email/DSM desktop jobs for the resource, including proven canonical aliases, are cancelled transactionally. Their delivery reason identifies the reset. Already accepted messages cannot be recalled; an in-flight submission may finish before the reset obtains the shared submission gate.

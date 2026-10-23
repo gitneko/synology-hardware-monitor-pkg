@@ -1,11 +1,13 @@
 import {t,dateLocale} from './i18n.js';
 export function eventCategory(event) {
+  if(event.kind==='snmp_trap')return 'trap';
   if(event.kind==='hardware_log')return 'log';
   if(event.key==='collector'||event.key?.startsWith('coverage:'))return 'monitoring';
   return 'hardware';
 }
 export function eventType(event) {
   const category=eventCategory(event);
+  if(category==='trap')return t('SNMP-Trap');
   if(category==='log')return t("Hardwarelog");
   if(event.kind==='recovery')return category==='monitoring'?t("Abfrage wieder erfolgreich"):t("Hardware-Entwarnung");
   if(event.kind==='repeat')return category==='monitoring'?t("Abfrage weiterhin gestört"):t("Alarmwiederholung");
@@ -13,6 +15,7 @@ export function eventType(event) {
 }
 export function emailDeliveryText(event) {
   if(event.mail_reason==='reset')return event.submitted_recipients?t('E-Mail: durch Zurücksetzen storniert · {0} bereits per SMTP angenommen',event.submitted_recipients):t('E-Mail: durch Zurücksetzen storniert');
+  if(event.mail_reason==='same_occurrence')return t('Gleiches Ereignis bereits gemeldet');
   if(event.mail_reason==='acknowledged')return event.submitted_recipients?t('E-Mail: durch Bestätigung unterdrückt · {0} bereits per SMTP angenommen',event.submitted_recipients):t('E-Mail: durch Bestätigung unterdrückt');
   if(event.mail_reason==='aggregate')return t("Sammelmeldung gebündelt · {0}",event.submitted_recipients?t("{0} bereits per SMTP angenommen",event.submitted_recipients):t("keine zusätzliche E-Mail"));
   if(event.transport==='smtp') {
@@ -34,6 +37,7 @@ export function deliveryText(event) {
   const email=emailDeliveryText(event),desktop=event.desktop;
   if(event.desktop_reason==='reset')return t('{0} · DSM-Desktop: durch Zurücksetzen storniert',email);
   if(event.desktop_reason==='acknowledged')return t('{0} · DSM-Desktop: durch Bestätigung unterdrückt',email);
+  if(event.desktop_reason==='same_occurrence')return t('{0} · DSM-Desktop: gleiches Ereignis bereits gemeldet',email);
   if(event.desktop_reason==='aggregate')return t("{0} · DSM-Desktop: Sammelmeldung gebündelt",email);
   if(desktop){
     const state=desktop.delivered?t("an DSM übergeben"):desktop.cancelled?t('storniert'):desktop.attempts>=8?t("Versandfehler"):desktop.error?t("erneuter Versuch vorgemerkt"):t('vorgemerkt');
@@ -51,6 +55,7 @@ export function sourceTimestamp(value) {
   const parsed=Date.parse(value);return Number.isFinite(parsed)?new Date(parsed).toLocaleString(dateLocale()):'';
 }
 export function capabilityText(c) {
+  if(c.optional===true&&c.outcome==='unsupported')return t('Optional · nicht bereitgestellt');
   if(c.outcome==='available')return c.attempts>1?t("Erfolgreich nach Wiederholung"):t("Erfolgreich");
   if(c.http_status)return `HTTP ${c.http_status}${c.attempts>1?t(" · {0} Versuche",c.attempts):''}`;
   const failure={deadline:"Zeitlimit der vollständigen Abfrage erreicht",resource_limit:"Ressourcenlimit der Abfrage erreicht",byte_limit:"Datenmengenlimit der Abfrage erreicht",item_limit:"Messwert- oder Hardwareloglimit erreicht",response_limit:"Antwort überschreitet das Größenlimit",invalid_response:"Ungültige Redfish-Antwort",certificate_error:"Serverzertifikat stimmt nicht überein oder ist zeitlich ungültig",timeout:"Zeitlimit der Teilabfrage erreicht",unsafe_link:"Unsicherer Redfish-Verweis abgewiesen",tls_error:"TLS-Verbindung fehlgeschlagen"}[c.outcome];
@@ -78,4 +83,10 @@ export function groupEvents(events) {
     buckets.set(key,bucket);
   }
   return groups;
+}
+
+export function eventProvenance(event){
+ const c=event.message_context;if(!c?.source)return '';
+ const source=({snmp_trap:t('SNMP-Trap'),snmp_poll:t('SNMP-Abfrage'),redfish:'Redfish'})[c.source]??c.source;
+ return [source,c.verified===true?t('Verifiziert'):c.verified===false?t('Nicht kryptografisch verifiziert'):'',c.provisional?t('Bestätigung ausstehend'):'',c.receipt_id?t('Empfangsbeleg {0}',c.receipt_id):''].filter(Boolean).join(' · ');
 }

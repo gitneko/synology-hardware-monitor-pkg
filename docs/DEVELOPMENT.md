@@ -22,7 +22,7 @@ The listener binds exclusively to `127.0.0.1`; use the displayed numeric URL. It
 
 SMTP sends real mail when configured. DSM desktop notifications are unavailable locally. The local host does not emulate DSM authentication, permissions or package lifecycle. Use separate development data; restoring a backup imports its device and SMTP settings too.
 
-SNMP polling/traps are not implemented in the current application. The local mode does not claim SNMP support; SNMP integration requires its own implementation and protocol/device acceptance tests.
+SNMP polling and the configurable trap receiver use the same collectors, credentials, receiver supervisor and alarm store as the DSM service. Live Redfish/SNMP device credentials are still required. The local HTTP integration test checks Redfish and SNMPv1/v2c/v3 polling, receiver configuration and an independently encoded v2c trap. It requires Net-SNMP (`snmpd`, `snmpget`, `snmptrap`). Local reference tests establish protocol behavior, not native DSM or vendor-firmware acceptance.
 
 ## Local checks
 
@@ -41,7 +41,14 @@ python3 -m unittest discover -s tools/tests -v
 python tools/integration_test.py target/debug/hardware-monitor
 python tools/legacy_tls_integration_test.py target/debug/hardware-monitor
 python tools/smtp_integration_test.py target/debug/hardware-monitor
+python3 tools/snmp_p2_integration.py target/debug/hardware-monitor --report .build/snmp-p2/reference-native.json
+python3 tools/snmp_p3_integration.py target/debug/hardware-monitor --report .build/snmp-p3/reference-native.json --load-seconds 60
+python3 tools/snmp_p4_integration.py target/debug/hardware-monitor --report .build/snmp-p4/reference-native.json --load-seconds 60
+python3 tools/snmp_integration_test.py target/debug/hardware-monitor --report .build/snmp-p6/reference-native.json
+python3 tools/snmp-p0/run.py
 ```
+
+The SNMP reference scripts additionally need Net-SNMP `snmpd`/`snmpget` and `snmptrap` for P3. They use randomly generated private credentials and temporary loopback agents; no real device or recipient is contacted. P3 also checks actual daemon reception, saved-target enrollment, explicit engine review, restart and bounded load. P4 also uses controlled local HTTPS/SMTP services to test partial alarms, old in-flight OK, confirmation, recovery and actual submission counts; it requires OpenSSL for temporary test certificates. See [P4 alarm results](SNMP-P4-RESULTS.md), [P2 polling results](SNMP-P2-RESULTS.md) and [P3 receiver results and limits](SNMP-P3-RESULTS.md).
 
 Integration tests use temporary loopback HTTPS/SMTP servers and synthetic credentials. They do not contact real recipients or modify servers. OpenSSL is a test dependency, not a runtime requirement of the static SPK. Positive native DSM authentication cannot be established on an ordinary Linux host; the normal DSM service has no authentication bypass; the optional local HTTP adapter is tested separately.
 
@@ -76,7 +83,7 @@ On an x86_64 Linux development machine (Ubuntu 24.04 is used by CI), install Rus
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential binutils curl perl python3 openssl
+sudo apt-get install -y build-essential binutils curl perl python3 openssl snmp snmpd patch
 rustup toolchain install 1.98.1 --component rustfmt --component clippy
 rustup override set 1.98.1
 rustup target add x86_64-unknown-linux-musl
@@ -86,20 +93,20 @@ python3 tools/build_packages.py
 
 OpenSSL is built from the Cargo.lock-pinned vendored source and linked statically; Perl is required for its build. The legacy TLS integration suite includes DHE-only TLS 1.2, exact certificate pinning and rejection before HTTP authentication.
 
-The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds it inside `.build/`. The package command builds the Rust executable with an explicit generic x86-64 CPU baseline, installs locked frontend dependencies, builds Vue, regenerates dependency license notices, runs the real static binary against synthetic HTTPS/SMTP servers and checks the finished DSM 7 SPK. It fails on any failed stage. No NAS, device or real recipient is contacted. It rewrites the generated `THIRD_PARTY_NOTICES.txt`; review that diff when dependencies change.
+The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds it inside `.build/`. The package command builds the Rust executable with an explicit generic x86-64 CPU baseline, installs locked frontend dependencies, builds Vue, regenerates dependency license notices, runs the real static binary against synthetic HTTPS/SMTP and independent Net-SNMP agents/traps (including two 60-second load cases), then checks the finished DSM 7 SPK. It fails on any failed stage. No NAS, device or real recipient is contacted. It rewrites the generated `THIRD_PARTY_NOTICES.txt`; review that diff when dependencies change.
 
 Output in `dist/current/`:
 
-- `HardwareMonitor-0.8.0-0039-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
+- `HardwareMonitor-0.9.0-0056-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
 - `latest-assets/`: fixed-name copies `HardwareMonitor-dsm7-x86_64.spk`, `build-manifest.json` and `SHA256SUMS`, ready for release upload.
 
-The JSON manifest records the source commit (when available), package hashes, version and archive timestamp. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
+The JSON manifest records the source base commit (when available), dirty state/source content hash, package hashes, version, archive timestamp and aggregate static SNMP evidence/binary hash. Dirty local builds are reviewable but the publisher rejects them before any GitHub operation. Sources must remain stable throughout a build; if generated notices change, review them and rebuild. `snmp-reference*.json` outside `latest-assets` retains the detailed local reports. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
 
 The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py` still accepts explicit `--arch v1000` or `--arch geminilake` for focused diagnostics. Its default is `x86_64`; only the DSM 7 profile is accepted. For example, after the main build:
 
 ```sh
 python3 tools/build_spk.py --profile dsm7 --arch x86_64 --binary target/x86_64-unknown-linux-musl/release/hardware-monitor
-python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0039-x86_64-dsm7-development.spk
+python3 tools/check_spk.py dist/HardwareMonitor-0.9.0-0056-x86_64-dsm7-development.spk
 ```
 
 Do not package a binary dynamically linked against the development host's glibc. The assembler rejects dynamic/wrong-CPU executables. Never enable `target-cpu=native` or platform-specific CPU flags for this shared package. The musl compiler and bundled C code use the same baseline. Runtime CPU detection in dependencies is distinct from requiring a newer CPU at startup. See [Architecture family decision](PACKAGE-ARCHITECTURES.md).
@@ -108,7 +115,7 @@ For controlled archive timestamps set a fixed, positive `SOURCE_DATE_EPOCH` for 
 
 ## GitHub Actions and the rolling `latest` release
 
-[The workflow](../.github/workflows/check.yml) runs on pushes, pull requests and manual dispatch. Rust/translation/frontend checks must pass before it builds the static binary and DSM 7 SPK. The checked release files are retained as the `checked-spks` Actions artifact for 14 days, including on pull requests.
+[The workflow](../.github/workflows/check.yml) runs on pushes, pull requests and manual dispatch. Rust/translation/frontend, P0 source/security/corpus and native SNMP checks must pass before it builds the static binary and DSM 7 SPK. Package generation requires Net-SNMP and runs static polling/receiver/alarm suites; normalized native/static SNMP reports are retained separately for 14 days. The checked release files are retained as the `checked-spks` Actions artifact for 14 days, including on pull requests.
 
 Only a push/manual run on the repository's **default branch** can publish. The publication job has `contents: write`; test/build jobs have read access only. No PAT or NAS/SMTP credentials are needed: GitHub's built-in token is used. Publication is serialized and refuses an older build if the default branch has already advanced. The `latest` tag is moved to the built commit so GitHub's source downloads match the SPKs. Checksums and the manifest are validated again before any write.
 
@@ -116,10 +123,35 @@ The existing development release is updated with `gh release upload --clobber`: 
 
 Asset replacement is not atomic. A failed upload can leave incomplete or temporarily mismatched assets; the workflow fails and must be rerun, and downloaders should verify checksums after a successful run. Immutable releases cannot be reused; the publisher refuses them before moving the tag. Repository rules must allow updating `latest` and release assets. Keep immutable, versioned releases separate if added later.
 
-After pushing this project to GitHub, enable Actions and allow the workflow token to write repository contents/releases in repository or organization policy. No remote is configured in the supplied local repository yet, so an actual hosted Actions run/publication has not been verified. A manual dispatch on a feature branch builds artifacts but does not publish.
+After pushing this project to GitHub, enable Actions and allow the workflow token to write repository contents/releases in repository or organization policy. Local P6 validation did not dispatch a hosted Actions run or publish release assets; local workflow syntax validation does not establish a successful hosted run. A manual dispatch on a feature branch builds artifacts but does not publish.
 
 ## README screenshots
 
 `python3 tools/preview_ui.py` serves the production UI with read-only synthetic data at `http://127.0.0.1:18773`. Choose English, capture the device and event views, and save images in `docs/images/`. This screenshot-only server denies writes and never runs as part of an SPK. It does not establish DSM authentication or hardware interoperability. Browser-owned file-picker text follows browser/OS language independently of the app.
 
-The upgrade hook stops the service and creates a private SQLite/master-key snapshot through the CLI. This local backup is not the password-encrypted app download. See [Backup and restore](BACKUP-RESTORE.md). Full rollback behavior, crash restart, resource measurements and directory-service group resolution still require target acceptance.
+The pre-upgrade hook stops the service and creates a private SQLite/master-key snapshot through the old CLI. The new package post-install hook runs `hardware-monitor initialize` before service start on install, upgrade and repair. This initializes/migrates the database and records diagnostics in private `service.log` without starting polling or delivery. First-start readiness allows 120 seconds and requires a connectable API socket; initialization uses a 30-second database busy timeout before returning to the five-second runtime setting. DSM service status is 0 when running, 3 when stopped and 4 when status cannot be determined. This local backup is not the password-encrypted app download. See [Backup and restore](BACKUP-RESTORE.md). Full rollback behavior, crash restart, resource measurements and directory-service group resolution still require target acceptance.
+
+## SNMP P5 interaction fixture
+
+`node tools/snmp_p5_preview.mjs` serves the actual Vite UI at `http://127.0.0.1:5185/p5-preview`, with disposable synthetic configuration/diagnostic responses. `?role=viewer` selects read-only fixture data. This is a separate loopback-only test server, never a product authentication bypass or SPK component; no BMC, NAS or mail recipient is contacted. Its supported writes mutate only in-memory fixture data. The optional `.build/snmp-p5/ui-requests.json` records action names, versions, secret actions and engine approvals without secret values. Keep all captures/reports ignored. Browser checks verify interaction and escaping; native authentication is covered separately by backend boundary tests and requires DSM acceptance. See [P5 results](SNMP-P5-RESULTS.md).
+
+For a local package needed before the two 60-second SNMP load scenarios finish,
+`python3 tools/build_packages.py --skip-load-tests` keeps all functional and
+package checks, records `skipped_checks` and runs the SNMP wrapper with load
+duration zero. CI/default builds retain both load scenarios. Subsequent load
+validation can use the delivered executable with
+`python3 tools/snmp_integration_test.py /path/to/hardware-monitor --require-static --load-seconds 60 --report /path/to/report.json`.
+
+
+The static SNMP package gate also runs `tools/snmp_ups_integration.py` through
+`tools/snmp_integration_test.py`: 3 UPS profiles × v1/v2c/v3-SHA1/v3-SHA256.
+Its synthetic numeric fixtures run behind independent Net-SNMP; they verify real
+CLI probe/poll/store/alarm/recovery paths without real UPS power controls.
+
+
+`python3 tools/upgrade_integration.py target/debug/hardware-monitor --report .build/upgrade-native.json`
+checks direct schema-1 upgrade, repeat post-install/repair, delayed startup and
+failed migration retry with synthetic private state. The optional
+`--legacy-binary /path/to/archived/hardware-monitor` creates the baseline with a
+real 0.8.0 executable. Native CI and package generation run the independent legacy
+schema fixture; the package manifest records the static upgrade-suite evidence.

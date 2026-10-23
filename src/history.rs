@@ -31,10 +31,10 @@ impl Store {
         anyhow::ensure!(
             matches!(
                 filter.category.as_str(),
-                "" | "all" | "hardware" | "monitoring" | "log"
+                "" | "all" | "hardware" | "monitoring" | "log" | "trap"
             ) && matches!(
                 filter.health.as_str(),
-                "" | "all" | "critical" | "warning" | "ok"
+                "" | "all" | "critical" | "warning" | "ok" | "unknown"
             ) && filter.device.len() <= 80,
             BoundaryError("history_filter_invalid")
         );
@@ -67,6 +67,10 @@ impl Store {
             "SMTP Empfänger",
             "DSM-Desktop-Status",
             "Gebündelte Komponenten",
+            "Quelle",
+            "Verifiziert",
+            "Vorläufig",
+            "Empfangsbeleg",
         ];
         csv.push_str(
             &headers
@@ -77,7 +81,9 @@ impl Store {
         let mut count = 0;
         for e in events {
             let text = |key: &str| e[key].as_str().unwrap_or("");
-            let category = if text("kind") == "hardware_log" {
+            let category = if text("kind") == "snmp_trap" {
+                "trap"
+            } else if text("kind") == "hardware_log" {
                 "log"
             } else if text("key") == "collector" || text("key").starts_with("coverage:") {
                 "monitoring"
@@ -149,6 +155,19 @@ impl Store {
                 e["total_recipients"].to_string(),
                 desktop_status.into(),
                 related,
+                e["message_context"]["source"].as_str().unwrap_or("").into(),
+                e["message_context"]["verified"]
+                    .as_bool()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                e["message_context"]["provisional"]
+                    .as_bool()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                e["message_context"]["receipt_id"]
+                    .as_i64()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
             ];
             csv.push_str(&values.iter().map(|v| cell(v)).collect::<Vec<_>>().join(";"));
             csv.push_str("\r\n");

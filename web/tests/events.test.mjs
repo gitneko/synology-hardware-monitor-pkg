@@ -45,3 +45,8 @@ test('grouped summaries are distinct from cancellation or delivery',()=>{
  assert.match(deliveryText({mail_reason:'aggregate',desktop_reason:'aggregate',transport:'smtp',cancelled:true}),/Sammelmeldung gebündelt.*keine zusätzliche E-Mail/);
  assert.match(deliveryText({mail_reason:'aggregate',submitted_recipients:1}),/1 bereits per SMTP angenommen/);
 });
+test('SNMP event-only history has its own category and proven occurrence cancellation is explicit',()=>{
+ const e={kind:'snmp_trap',health:'critical',key:'trap:synthetic',mail_reason:'same_occurrence',desktop_reason:'same_occurrence'};
+ assert.equal(eventCategory(e),'trap');assert.equal(eventType(e),'SNMP-Trap');assert.equal(filterEvents([e],{category:'trap',health:'all',device:'all'}).length,1);
+ assert.match(deliveryText(e),/gleiches Ereignis bereits gemeldet/);
+});

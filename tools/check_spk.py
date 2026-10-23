@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Inspect the assembled SPK and execute its extracted binary on the development host."""
-import argparse,hashlib,io,json,os,re,shlex,subprocess,tarfile,tempfile,urllib.parse
+import argparse,hashlib,io,json,os,re,shlex,sqlite3,subprocess,tarfile,tempfile,urllib.parse
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('spk',type=Path);a=p.parse_args()
 profile='dsm7'
@@ -19,6 +19,8 @@ with tarfile.open(a.spk) as outer:
     assert resource=={}, 'Unverified DSM resource requests must not be shipped'
     assert not any(n.startswith('conf/systemd') for n in names)
     lifecycle=outer.extractfile('scripts/start-stop-status').read()
+    postinst=outer.extractfile('scripts/postinst').read()
+    assert b'hardware-monitor initialize' in postinst and b'umask 077' in postinst
     assert b'service start' in lifecycle and b'--notify-dsm' not in lifecycle and b'synosystemctl' not in lifecycle
     import struct
     width,height=struct.unpack('>II',outer.extractfile('PACKAGE_ICON.PNG').read()[16:24])
@@ -76,6 +78,9 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
         # Regression: shipping a fresh package with stale Vue assets would retain
         # the observed token-less request. Inspect the bundled JavaScript itself.
         javascript=b'\n'.join(payload.extractfile(name).read() for name in members if name.startswith('ui/assets/') and name.endswith('.js'))
+        assert b'synology_dsm' in javascript and b'Synology DSM' in javascript
+        assert all(profile in javascript for profile in (b'ups_generic',b'apc_ups',b'eaton_ups'))
+        assert b'network_generic' in javascript and b'snmp:interface:' in javascript
         assert b'/webman/login.cgi' in javascript and b'X-SYNO-TOKEN' in javascript
         assert full_version.encode() in javascript and b'Oberfl' in javascript
         assert b'POST' in javascript and b'csrf' in javascript and b'certificate_pem' in javascript, 'Device administration assets missing'
@@ -86,6 +91,9 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
         assert app['texts']=='texts'
         assert app['preloadTexts']==[f'{section}:{key}_{part}' for section in ['notification','notification_details','notification_details_en','notification_details_de'] for key in ['test','critical','warning','recovery','repeat','hardware_log'] for part in ['title','body']]
         assert all(word in javascript for word in [b'notification_save',b'time_local',b'time_utc',b'date_format',b'desktop_enabled'])
+        assert all(action in javascript for action in [b'snmp_receiver_save', b'snmp_trap_probe', b'snmp_receipts', b'snmp_secrets', b'snmp_trap']), 'SNMP administration/provenance UI missing'
+        assert all(label in javascript for label in [b'SNMPv1', b'SNMPv2c', b'SNMPv3', b'1162', b'1024']), 'SNMP versions/receiver settings missing'
+        assert 'docs/SNMP-IMPLEMENTATION-PLAN.md' in members
         for language in ['enu','ger']:
             text=payload.extractfile(f'ui/texts/{language}/mails').read().decode()
             strings=payload.extractfile(f'ui/texts/{language}/strings').read().decode()
@@ -94,7 +102,7 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
                 body=next(line for line in strings.split('[notification_details]',1)[1].splitlines() if line.startswith(category+'_body='))
                 assert all(token in body for token in ['{0}','{1}','{2}']), 'Desktop placeholders missing from packaged strings'
             assert all(f'[{key}]' in text for key in ['HardwareMonitorCritical','HardwareMonitorWarning','HardwareMonitorRecovered'])
-        assert not any(n.endswith(('.db','.key')) for n in members)
+        assert not any(n.startswith(('vendor/','tools/','node_modules/','.build/')) or n.endswith(('.db','.key','.sqlite','.pem','.hmbackup','.mib')) for n in members), 'Runtime state or reference tooling must not ship'
         with tempfile.TemporaryDirectory() as temp:
             temp=Path(temp);(temp/'bin').mkdir();(temp/'ui').mkdir()
             binary=temp/'bin/hardware-monitor';binary.write_bytes(payload.extractfile('bin/hardware-monitor').read());binary.chmod(0o755)
@@ -102,6 +110,20 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
             assert '(NEEDED)' not in subprocess.check_output(['readelf','-d',str(binary)],text=True)
             assert subprocess.check_output([str(binary),'--version']).strip()==f'hardware-monitor {version}'.encode()
             assert subprocess.run([str(binary),'dev','--help'],capture_output=True).returncode!=0, 'Local development authentication must not be shipped in an SPK'
+            fresh=temp/'fresh-state'
+            prepare_invocation=' '.join(shlex.quote(str(v)) for v in [binary,'--state',fresh,'--socket',temp/'prepare.sock'])
+            prepare=postinst.decode().replace('/var/packages/HardwareMonitor/target/bin/hardware-monitor',prepare_invocation).replace('/var/packages/HardwareMonitor/etc/private',shlex.quote(str(fresh)))
+            subprocess.run(['sh','-c',prepare],check=True,capture_output=True)
+            first_key=(fresh/'master.key').read_bytes()
+            subprocess.run(['sh','-c',prepare],check=True,capture_output=True)
+            assert (fresh/'master.key').read_bytes()==first_key
+            assert (fresh/'service.log').stat().st_mode & 0o077 == 0
+            dashboard=json.loads(subprocess.check_output([str(binary),'--state',str(fresh),'snapshot']))
+            assert dashboard['version']==version and dashboard['devices']==[]
+            with sqlite3.connect(fresh/'monitor.db') as database:
+                settings=json.loads(database.execute('SELECT config FROM snmp_receiver_settings WHERE id=1').fetchone()[0])
+                assert settings=={'enabled':False,'listen_port':1162,'listen_addresses':['0.0.0.0']}, 'New installation must not enable trap reception'
+                assert database.execute('SELECT COUNT(*) FROM protocol_secrets').fetchone()[0]==0
             cgi=temp/'ui/api.cgi';cgi.write_bytes(payload.extractfile('ui/api.cgi').read());cgi.chmod(0o755)
             response=subprocess.check_output([str(cgi)],env={**os.environ,'REQUEST_METHOD':'GET','HTTP_COOKIE':''})
             assert b'Status: 403 Forbidden' in response
@@ -134,7 +156,7 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
                 subprocess.run(['sh',str(script),'start'],check=True,capture_output=True)
                 assert subprocess.run(['sh',str(script),'invalid'],capture_output=True).returncode!=0
                 subprocess.run(['sh',str(script),'stop'],check=True,capture_output=True)
-                assert subprocess.run(['sh',str(script),'status'],capture_output=True).returncode!=0
+                assert subprocess.run(['sh',str(script),'status'],capture_output=True).returncode==3
             finally:
                 subprocess.run(['sh',str(script),'stop'],capture_output=True)
 subprocess.run([os.sys.executable, '-m', 'unittest', 'discover', '-s', str(Path(__file__).parent/'tests'),

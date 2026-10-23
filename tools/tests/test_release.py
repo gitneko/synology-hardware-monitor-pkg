@@ -88,6 +88,14 @@ class PublishTests(unittest.TestCase):
             self.publish()
         self.assertFalse(self.calls)
 
+    def test_dirty_local_build_rejected_before_network(self):
+        manifest = self.root/'build-manifest.json'
+        data = json.loads(manifest.read_text()); data['source_dirty'] = True
+        manifest.write_text(json.dumps(data)); self.sums()
+        with self.assertRaisesRegex(ValueError, 'Dirty local build'):
+            self.publish()
+        self.assertFalse(self.calls)
+
     def test_failed_upload_does_not_edit_notes_or_delete_old_assets(self):
         def fail(*args, **kwargs):
             if args[:2] == ('release', 'upload'):

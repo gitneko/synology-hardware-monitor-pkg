@@ -21,3 +21,5 @@ Reference: [lettre 0.11.23](https://docs.rs/lettre/0.11.23/lettre/). See [Notifi
 ## Manual event replay
 
 Administrators can select **Events → Resend email …** to preview and send one recorded event to one saved recipient using the current saved template. This explicit action works independently of automatic delivery filters and preserves the original alarm/event state and delivery history. No TEST marker is inserted. Each intentional job has a new Message-ID; its technical retries keep that ID and frozen content. See [Manual email replay](MAIL-REPLAY.md) for duplicate handling, history and cancellation rules.
+
+P5 lists the additional `{{source}}`, `{{verified}}` and `{{provisional}}` placeholders in the template editor. They use structured event provenance from P4. Saving or switching interface language does not rewrite an existing custom template. Trap provenance also appears in history and CSV; event-only trap delivery has its own default-off filter under Channels & events.

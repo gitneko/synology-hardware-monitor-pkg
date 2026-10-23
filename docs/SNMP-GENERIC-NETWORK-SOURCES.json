@@ -1,0 +1,19 @@
+{
+  "purpose": "Behavioral comparison and standardized numeric OID verification only. No Zabbix template/code is copied, imported, bundled or loaded at runtime.",
+  "sources": {
+    "template_module_generic_snmp_snmp.yaml": {
+      "url": "https://raw.githubusercontent.com/zabbix/zabbix/release/7.4/templates/net/generic_snmp_snmp/template_module_generic_snmp_snmp.yaml",
+      "sha256": "b80a672e52173a1a494aff3da4ff2d4ef7bcb5ed69e6cd85533044d07865ff19"
+    },
+    "template_net_generic_snmp.yaml": {
+      "url": "https://raw.githubusercontent.com/zabbix/zabbix/release/7.4/templates/net/generic_snmp/template_net_generic_snmp.yaml",
+      "sha256": "fc8851aa34269ba6d9502b25b534468977d8d1ffd68482e0f25170485792c75b"
+    }
+  },
+  "standards": [
+    "https://www.rfc-editor.org/rfc/rfc3418.html",
+    "https://www.rfc-editor.org/rfc/rfc2790.html",
+    "https://www.rfc-editor.org/rfc/rfc2863.html",
+    "https://www.rfc-editor.org/rfc/rfc3635.html"
+  ]
+}

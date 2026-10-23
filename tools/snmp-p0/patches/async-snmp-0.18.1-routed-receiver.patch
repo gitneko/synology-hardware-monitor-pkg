@@ -1,0 +1,119 @@
+--- a/src/v3/engine.rs
++++ b/src/v3/engine.rs
+@@ -309,6 +309,25 @@
+ }
+ 
+ impl EngineState {
++    /// Import a previously authenticated observation. The caller supplies the
++    /// original monotonic observation instant, never an unauthenticated Report.
++    pub fn from_authenticated_observation(
++        engine: DiscoveredEngine,
++        boots: u32,
++        time: u32,
++        observed_at: Instant,
++    ) -> Result<Self> {
++        validate_engine_id(engine.engine_id())?;
++        validate_authenticated_time(boots, time)?;
++        if observed_at > Instant::now() {
++            return Err(Error::Config("future authenticated observation".into()).boxed());
++        }
++        Ok(Self {
++            discovered: engine,
++            authenticated_time: Some(AuthenticatedEngineTime::new_at(boots, time, observed_at)),
++        })
++    }
++
+     /// Create engine state whose boots/time have already been authenticated by
+     /// the caller's internal protocol path.
+     pub(crate) fn new(engine_id: Bytes, engine_boots: u32, engine_time: u32) -> Self {
+--- a/src/notification/mod.rs
++++ b/src/notification/mod.rs
+@@ -681,6 +681,7 @@
+ pub struct NotificationReceiverBuilder {
+     bind_addr: String,
+     usm_users: HashMap<Bytes, UsmUser>,
++    remote_engine_capacity: usize,
+     communities: Vec<Community>,
+     authoritative_engine: Option<AuthoritativeEngine>,
+     des_salt_state: Option<DesSaltState>,
+@@ -705,6 +706,7 @@
+         Self {
+             bind_addr: "0.0.0.0:162".to_string(),
+             usm_users: HashMap::new(),
++            remote_engine_capacity: MAX_REMOTE_ENGINES,
+             communities: Vec::new(),
+             authoritative_engine: None,
+             des_salt_state: None,
+@@ -718,6 +720,13 @@
+ 
++    /// Bound retained remote engine state. Routed per-device receivers use 1.
++    #[must_use]
++    pub fn remote_engine_capacity(mut self, capacity: usize) -> Self {
++        self.remote_engine_capacity = capacity;
++        self
++    }
++
+     /// Set the UDP bind address.
+     ///
+     /// Default is `0.0.0.0:162` (UDP, standard SNMP trap port).
+     #[must_use]
+     pub fn bind(mut self, addr: impl Into<String>) -> Self {
+@@ -1055,6 +1063,9 @@
+             )
+             .boxed());
+         }
++        if self.remote_engine_capacity == 0 || self.remote_engine_capacity > MAX_REMOTE_ENGINES {
++            return Err(Error::Config("invalid remote engine capacity".into()).boxed());
++        }
+         let requires_authoritative_engine = !self.usm_users.is_empty();
+         let validated_usm = validate_authoritative_usm(
+             self.usm_users,
+@@ -1105,7 +1116,7 @@
+                 engine_boots_base: engine_boots,
+                 engine_start: Instant::now(),
+                 usm_stats: UsmStats::default(),
+-                remote_engines: Mutex::new(RemoteEngineTable::new(MAX_REMOTE_ENGINES)),
++                remote_engines: Mutex::new(RemoteEngineTable::new(self.remote_engine_capacity)),
+                 max_message_size: self.max_message_size,
+                 decode_config: self.decode_config,
+                 snmp_silent_drops: AtomicU32::new(0),
+@@ -1502,6 +1513,39 @@
+ }
+ 
+ impl NotificationReceiver {
++    /// Import independently authenticated remote state without resetting a
++    /// newer receiver baseline. Callers must approve the sender identity first.
++    pub fn seed_authenticated_remote(&self, state: crate::v3::EngineState) -> Result<()> {
++        crate::v3::validate_engine_id(state.engine_id())?;
++        if state.authenticated_time().is_none() {
++            return Err(Error::Config("authenticated remote time required".into()).boxed());
++        }
++        let mut table = self.inner.remote_engines.lock().unwrap();
++        let key = state.engine_id().clone();
++        if table.update(&key, |current| {
++            current.merge_from(&state);
++            ((), Instant::now())
++        }).is_none() {
++            table.insert(key, state, Instant::now());
++        }
++        Ok(())
++    }
++
++    /// Process one caller-routed datagram through the unchanged USM/PDU path.
++    /// Callers enforce source, size and routing policy before this boundary.
++    /// Acceptance is still required and may reject Informs before any response.
++    pub async fn process_datagram(
++        &self,
++        data: Bytes,
++        source: SocketAddr,
++    ) -> Result<Option<ReceivedNotification>> {
++        if data.len() > self.inner.max_message_size {
++            return Err(Error::Config("routed datagram exceeds receiver limit".into()).boxed());
++        }
++        let _guard = self.inner.recv_gate.lock().await;
++        self.parse_and_respond(data, source, None).await
++    }
++
+     /// Create a builder for configuring the notification receiver.
+     ///
+     /// Use this to configure varbind validation or USM credentials for V3

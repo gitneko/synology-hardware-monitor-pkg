@@ -3,6 +3,7 @@ import {computed,ref} from 'vue';
 import {t} from './i18n.js';
 import {labels,timestamp,alarmConfirmation,coveredLabels} from './health.js';
 import {administer} from './device-api.js';
+import {eventProvenance} from './events.js';
 import {acknowledgementOperation,resetAlarmOperation} from './alarm-actions.js';
 const props=defineProps({alarm:Object,device:Object,dashboard:Object});
 const emit=defineEmits(['changed']);
@@ -30,7 +31,8 @@ async function save(){
 <div class="alarm">
   <span :class="['badge',status]">{{labels[status]}}</span> {{alarm.label}}
   <small v-if="status!==alarm.health">{{t('Hardwarezustand:')}} {{labels[alarm.health]}}</small>
-  <small>{{alarmConfirmation(alarm)}} {{t('· Zuletzt gemessen:')}} {{timestamp(alarm.observed)}}</small>
+  <small>{{alarmConfirmation(alarm)}} {{alarm.evidence?.provisional?t('· Zuletzt empfangen:'):t('· Zuletzt gemessen:')}} {{timestamp(alarm.evidence?.provisional?alarm.evidence.received:alarm.observed)}}</small>
+  <small v-if="alarm.evidence?.active">{{t('Herkunft:')}} {{eventProvenance({message_context:alarm.evidence})}}</small>
   <small v-if="alarm.covered_by?.length">{{t('Benachrichtigung gebündelt mit:')}} {{coveredLabels(alarm,device)}}</small>
   <small v-if="alarm.assessment?.derived && status==='acknowledged'">{{t('Durch bestätigte Komponentenfehler abgedeckt.')}}</small>
   <small v-if="acknowledgement"><strong v-if="acknowledgement.needs_review">{{t('Importierte Bestätigung prüfen:')}}</strong> {{t('Bestätigt von {0} am {1}',acknowledgement.actor,timestamp(acknowledgement.created))}}<br>{{acknowledgement.reason}}</small>

@@ -21,10 +21,27 @@ The collector follows advertised Redfish resources, selected HPE SmartStorage li
 
 Build 0032 additionally verified the DL160 Gen10's HPE SmartStorage physical/data-drive links, E208i-p RAID-1 membership and summary grouping to a reported failed SAS disk. Its standard Storage view separately lists empty SATA controllers and does not expose that array. Earlier complete polls covered only the resources discovered at the time; see the [0032 validation record](VALIDATION.md#build-0032-hpe-smartstorage-discovery-and-alarm-dependencies-20-october-2026).
 
+## Synology DSM SNMP profile acceptance (21 October 2026)
+
+The user confirmed installation of build **0.9.0-0051** and operation of the
+**Synology DSM polling profile**. The polled target model, DSM version and SNMP
+version/security selection were not specified in this report. This confirmation
+is recorded separately from the prior RS2421RP+ hosting-platform results; it
+must not be expanded to a model/firmware/security matrix or physical fault and
+recovery testing. P7 is partially confirmed and the remaining scenarios stay
+open. See [DSM profile evidence and limits](SNMP-SYNOLOGY-RESULTS.md).
+
 ## Vendor documentation and licensing boundary
 
 Dell documents Redfish across iDRAC7/8 and states that Redfish is included across license levels, while individual operations still require authorization and some authentication integrations have separate license requirements. That supports targeting ordinary read-only accounts, not a blanket guarantee for every OEM resource. [Dell authentication/authorization guide](https://www.dell.com/support/manuals/en-us/idrac7-8-lifecycle-controller-v2.60.60.60/idrac_2.60.60.60_redfishapiguide/redfish-authentication-and-authorization?guid=guid-d572792f-afd2-499a-bf12-38a6778b9bbc&lang=en-us).
 
 HPE documents the iLO RESTful API for iLO 5 and Gen10 storage interfaces. The application requests no Advanced-only control/console functionality. Read-only collection has been demonstrated on the DL160 Gen10 with iLO 5 v3.22. The test did not inspect license entitlements or certify complete coverage without Advanced. [HPE API overview](https://developer.hpe.com/platform/ilo-restful-api/home/), [HPE storage model](https://developer.hpe.com/blog/storage-management-with-redfish/), [HPE iLO licensing information](https://www.hpe.com/us/en/collaterals/collateral.c04154343.html).
 
-Vendor documentation was rechecked on 18 October 2026. It establishes interface availability, not complete application interoperability. No broad claim of universal RAID, OEM sensor or threshold-schema coverage is made. Standard health fields and selected embedded sensor/threshold forms are supported; additional schemas require fixtures and tests. SNMP fallback/traps are not implemented yet.
+Vendor documentation was rechecked on 18 October 2026. It establishes interface availability, not complete application interoperability. No broad claim of universal RAID, OEM sensor or threshold-schema coverage is made. Standard health fields and selected embedded sensor/threshold forms are supported; additional schemas require fixtures and tests. Build 0.9.0-0051 implements explicit SNMP primary polling and separate trap reception, with no automatic protocol fallback. The DSM polling profile has the user confirmation above; other SNMP hardware/trap combinations remain subject to P7 acceptance.
+
+
+Build 0.9.0-0054 adds APC PowerNet, Eaton xUPS and RFC 1628 UPS-MIB polling
+profiles ([scope and synthetic validation](SNMP-UPS-RESULTS.md)). No real UPS,
+management card or firmware combination is yet confirmed. In particular this
+is not blanket coverage for legacy Eaton/MGE MIB variants, APC PDUs, outlet
+control, parallel-module topology or all enterprise UPS product families.

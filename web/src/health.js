@@ -3,12 +3,15 @@ export function measurementSnapshot(device) {
   const snapshot=device?.snapshot;
   return Array.isArray(snapshot?.observations) && Array.isArray(snapshot?.capabilities) ? snapshot : null;
 }
+export function blocksAssessment(capability){return capability.outcome!=='available' && !(capability.optional===true && capability.outcome==='unsupported');}
 export function overall(device) {
+  if (device.trap_health==='critical')return 'critical';
+  if (device.trap_health==='warning')return device.overall_status==='critical'?'critical':'warning';
   if (device.stale || !measurementSnapshot(device)) return 'unknown';
   if (['ok','warning','critical','unknown','acknowledged'].includes(device.overall_status)) return device.overall_status;
   if (device.alarms.some(a=>a.health==='critical')) return 'critical';
   if (device.alarms.some(a=>a.health==='warning')) return 'warning';
-  if (device.snapshot.capabilities.some(c=>c.outcome!=='available')) return 'unknown';
+  if (device.snapshot.capabilities.some(blocksAssessment)) return 'unknown';
   const states=device.snapshot.observations.filter(o=>o.key!=='collector' && !o.key.startsWith('coverage:') && !assessmentReason(o,device.snapshot));
   if (states.some(o=>o.health==='critical')) return 'critical';
   if (states.some(o=>o.health==='warning')) return 'warning';
@@ -35,12 +38,12 @@ export function retainedObservationStatus(observation,snapshot,device) {
 export function observationLabel(observation,snapshot,device) {
   const status=observationStatus(observation,snapshot,device);
   if(status!=='not_applicable')return labels[status];
-  return ({absent:t('Nicht vorhanden'),disabled:t('Deaktiviert'),informational:t('Information'),empty_controller:t('Controller ohne Laufwerke')})[snapshot.assessment_exclusions[observation.key]]??t('Nicht relevant');
+  return ({absent:snapshot?.snmp?.profile==='hpe_ilo5'?t('Nicht bestückt'):t('Nicht vorhanden'),disabled:t('Deaktiviert'),informational:t('Information'),empty_controller:t('Controller ohne Laufwerke')})[snapshot.assessment_exclusions[observation.key]]??t('Nicht relevant');
 }
 export function timestamp(seconds) { return seconds ? new Date(seconds*1000).toLocaleString(dateLocale()) : t("Noch keine Abfrage"); }
 
 export function primaryAlarms(device,filter='all'){return device.alarms.filter(a=>!a.covered_by?.length && matchesAlarm(a,filter));}
 export function summaryAlarms(device,filter='all'){return device.alarms.filter(a=>a.covered_by?.length && matchesAlarm(a,filter));}
 function matchesAlarm(alarm,filter){return filter==='all'||(filter==='acknowledged')===(alarm.assessment?.status==='acknowledged');}
-export function alarmConfirmation(alarm){return alarm.current_health==='unknown'?t("Gespeicherter Fehler · aktuell nicht bewertbar"):alarm.current_health?t("Aktuell gemessen"):t("Gespeicherter Fehler");}
+export function alarmConfirmation(alarm){if(alarm.evidence?.active!==false && alarm.evidence?.provisional)return alarm.evidence.confirmation==='unavailable'?t('SNMP-Trap · Bestätigung derzeit nicht möglich'):t('SNMP-Trap · Bestätigung ausstehend');if(alarm.evidence?.active && alarm.evidence?.confirmation==='confirmed')return t('Trap-Fehler durch Abfrage bestätigt');return alarm.current_health==='unknown'?t("Gespeicherter Fehler · aktuell nicht bewertbar"):alarm.current_health?t("Aktuell gemessen"):t("Gespeicherter Fehler");}
 export function coveredLabels(alarm,device){return (alarm.covered_by??[]).map(key=>device.alarms.find(a=>a.key===key)?.label??key).join(', ');}

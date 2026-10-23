@@ -1,6 +1,6 @@
 [package]
 name = "hardware-monitor"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Read-only multi-vendor hardware monitoring for Synology DSM"
@@ -11,6 +11,9 @@ rust-version = "1.98"
 local-dev = ["hyper/server"]
 
 [dependencies]
+async-snmp = { version = "=0.18.1", path = "vendor/async-snmp-0.18.1", default-features = false, features = ["crypto-rustcrypto"] }
+bytes = "1"
+socket2 = "0.6"
 anyhow = "1"
 aes-gcm = "0.10"
 clap = { version = "4.5", features = ["derive"] }

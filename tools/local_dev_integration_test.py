@@ -3,6 +3,7 @@
 import base64
 import http.client
 import json
+import secrets
 from pathlib import Path
 import socket
 import ssl
@@ -43,6 +44,65 @@ class Bmc(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(body)
+
+
+def exercise_snmp(root, write, dashboard):
+    from snmp_p2_integration import agent
+    from snmp_p3_integration import community_packet
+    community = secrets.token_hex(16)
+    users = [('local_snmp', 'SHA-256', secrets.token_hex(12), secrets.token_hex(12))]
+    ids = []
+    with agent(root/'snmp-reference', community, users) as agent_port:
+        for version in ('v1', 'v2c', 'v3'):
+            security = {'version': version}
+            credentials = {'kind':'community', 'community':community}
+            if version == 'v3':
+                security.update(username=users[0][0],auth='sha256',privacy='aes128')
+                credentials = {'kind':'usm','auth_password':users[0][2],'priv_password':users[0][3]}
+            device = dict(id=None,revision=None,name=f'Local SNMP {version}',primary_protocol='snmp',
+                          snmp_poll=dict(host='127.0.0.1',port=agent_port,security=security,profile='generic',timeout_ms=500,retries=1),
+                          interval_seconds=30,repeat_seconds=None,alerts_enabled=False,enabled=True,
+                          snmp_secrets={'snmp_poll':{'action':'replace','credentials':credentials}})
+            if version == 'v1':
+                device['snmp_traps'] = dict(enabled=True,allowed_sources=['127.0.0.1'],security={'version':'v2c'},profile='generic')
+                device['snmp_secrets']['snmp_traps'] = {'action':'replace','credentials':{'kind':'community','community':community}}
+            assert write({'action':'test','device':device})['ok'], 'Local SNMP connection test failed'
+            saved = write({'action':'save','device':device})
+            assert saved['ok'], 'Local SNMP device save failed'
+            ids.append(saved['id'])
+        for _ in range(200):
+            view = dashboard()
+            polled = [d for d in view['devices'] if d['device']['id'] in ids and (d.get('snapshot') or {}).get('snmp')]
+            if len(polled) == 3: break
+            time.sleep(.05)
+        assert len(polled) == 3, 'Local daemon did not poll all three SNMP versions'
+        assert {d['snapshot']['snmp']['version'] for d in polled} == {'v1','v2c','v3'}
+        assert all(any(o['key']=='snmp:availability' and o['health']=='ok' for o in d['snapshot']['observations']) for d in polled)
+        assert next(d for d in polled if d['snapshot']['snmp']['version']=='v3')['snapshot']['snmp']['engine_id']
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as reservation:
+            reservation.bind(('127.0.0.1',0)); receiver_port=reservation.getsockname()[1]
+        revision=dashboard()['snmp_receiver']['revision']
+        enabled=write({'action':'snmp_receiver_save','settings':dict(enabled=True,listen_port=receiver_port,listen_addresses=['127.0.0.1']),'revision':revision})
+        assert enabled['ok'], 'Local HTTP API did not enable the SNMP receiver'
+        packet=community_packet(root,'2c',community)
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sender:
+            for _ in range(100):
+                sender.sendto(packet,('127.0.0.1',receiver_port))
+                receipts=write({'action':'snmp_receipts','device':ids[0],'limit':10})
+                if receipts['ok'] and receipts['receipts']:break
+                time.sleep(.05)
+        assert receipts['ok'] and receipts['receipts'], 'Local mode did not receive the independent SNMP trap'
+        assert receipts['receipts'][0]['receipt']['version']=='v2c'
+        assert any(d['device']['id']==ids[0] and d.get('last_trap_received') for d in dashboard()['devices'])
+        view=json.dumps(dashboard())+json.dumps(receipts)
+        assert not any(secret in view for secret in (community,users[0][2],users[0][3])), 'Local SNMP credentials were disclosed'
+        current=dashboard()['snmp_receiver']['revision']
+        assert write({'action':'snmp_receiver_save','settings':dict(enabled=False,listen_port=receiver_port,listen_addresses=['127.0.0.1']),'revision':current})['ok']
+        # Keep this fixture isolated from the persistence/Redfish assertions.
+        for identifier in ids:
+            item=next(d for d in dashboard()['devices'] if d['device']['id']==identifier)
+            assert write({'action':'delete','id':identifier,'revision':item['revision']})['ok']
+    print('Local SNMP integration passed: HTTP probe/save, v1/v2c/v3 authPriv daemon polling, receiver configuration and independent v2c trap')
 
 
 def main():
@@ -132,6 +192,8 @@ def main():
                 if view['devices'] and view['devices'][0].get('snapshot'):
                     break
                 time.sleep(.05)
+            exercise_snmp(root, write, dashboard)
+            view = dashboard()
             old_csrf = view['csrf']
             item = view['devices'][0]
             assert any(row['reading'] == 42 for row in item['snapshot']['observations']), item

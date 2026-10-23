@@ -1,10 +1,78 @@
 use crate::model::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::path::Path;
 
+/// Device, selected encrypted primary credential, device revision, runtime epoch.
+pub type PollTarget = (Device, Vec<u8>, i64, i64);
 pub struct Store(pub Connection);
+
+fn migration_backup(conn: &Connection, dir: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let name = format!("pre-snmp-schema1-{:032x}", rand::random::<u128>());
+    let complete = dir.join(&name);
+    let destination = dir.join(format!(".{name}.partial"));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&destination)?;
+    let result = (|| -> Result<()> {
+        let backup = destination.join("monitor.db");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&backup)?;
+        conn.execute(
+            "VACUUM INTO ?1",
+            [backup
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("backup path"))?],
+        )?;
+        // Keep the matching key when present; never generate a replacement key.
+        if dir.join("master.key").exists() {
+            use std::io::{Read, Write};
+            let source = dir.join("master.key");
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let source = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(source)?;
+            let meta = source.metadata()?;
+            anyhow::ensure!(
+                meta.is_file()
+                    && meta.len() == 32
+                    && meta.permissions().mode() & 0o077 == 0
+                    && meta.uid() == unsafe { libc::geteuid() },
+                "invalid master key backup"
+            );
+            let mut key = zeroize::Zeroizing::new(Vec::new());
+            source.take(33).read_to_end(&mut key)?;
+            anyhow::ensure!(key.len() == 32, "invalid master key backup");
+            let mut out = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(destination.join("master.key"))?;
+            out.write_all(&key)?;
+            out.sync_all()?;
+        }
+        std::fs::File::open(&backup)?.sync_all()?;
+        std::fs::File::open(&destination)?.sync_all()?;
+        // Publish only a complete, synced database/key pair. An interrupted copy
+        // must not look like a usable rollback backup.
+        std::fs::rename(&destination, &complete)?;
+        std::fs::File::open(dir)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        // Only our newly created temporary files; never touch existing backups.
+        let _ = std::fs::remove_file(destination.join("monitor.db"));
+        let _ = std::fs::remove_file(destination.join("master.key"));
+        let _ = std::fs::remove_dir(&destination);
+    }
+    result
+}
 
 pub struct MailJob {
     pub outbox: i64,
@@ -18,9 +86,40 @@ pub struct MailJob {
 impl Store {
     pub fn open(dir: &Path) -> Result<Self> {
         crate::vault::private_dir(dir)?;
-        let conn = Connection::open(dir.join("monitor.db"))?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;
+        let mut database = Connection::open(dir.join("monitor.db"))?;
+        // Include schema discovery and backup; runtime keeps a shorter timeout.
+        database.busy_timeout(std::time::Duration::from_secs(30))?;
+        let has_schema: bool = database.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')", [], |r| r.get(0))?;
+        let version: i64 = if has_schema {
+            let (count, version): (i64, i64) = database.query_row(
+                "SELECT COUNT(*),COALESCE(MIN(version),0) FROM schema_version",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            anyhow::ensure!(count == 1, "invalid database schema marker");
+            version
+        } else {
+            1
+        };
+        anyhow::ensure!(
+            matches!(version, 1 | 2),
+            "unsupported database schema; restore matching application version"
+        );
+        let existing: bool = database.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='devices')",
+            [],
+            |r| r.get(0),
+        )?;
+        if version == 1 && existing {
+            eprintln!("Preparing private database/key backup before schema-1 migration");
+            migration_backup(&database, dir).context("create pre-migration database/key backup")?;
+            eprintln!("Private pre-migration backup complete");
+        }
+        database.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;",
+        )?;
+        let conn = database.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        conn.execute_batch("
           CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER NOT NULL);
           INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM schema_version);
@@ -38,7 +137,7 @@ impl Store {
         let version: i64 =
             conn.query_row("SELECT version FROM schema_version", [], |r| r.get(0))?;
         anyhow::ensure!(
-            version == 1,
+            matches!(version, 1 | 2),
             "unsupported database schema; restore matching application version"
         );
         // Additive migrations keep existing device records and encrypted secrets.
@@ -75,7 +174,35 @@ impl Store {
           END;")?;
         crate::acknowledgement::initialize(&conn)?;
         crate::mail_replay::initialize(&conn)?;
-        Ok(Self(conn))
+        crate::snmp::persistence::initialize(&conn)?;
+        if version == 1 {
+            let records = {
+                let mut q = conn.prepare("SELECT id,config FROM devices")?;
+                let rows = q
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            for (id, raw) in records {
+                let d: Device = serde_json::from_str(&raw)?;
+                d.validate()?;
+                anyhow::ensure!(
+                    d.id == id
+                        && d.primary_protocol == PrimaryProtocol::Redfish
+                        && d.snmp_poll.is_none()
+                        && d.snmp_traps.is_none(),
+                    "invalid legacy device"
+                );
+                conn.execute(
+                    "UPDATE devices SET config=?2 WHERE id=?1",
+                    params![id, serde_json::to_string(&d)?],
+                )?;
+            }
+            conn.execute("UPDATE schema_version SET version=2", [])?;
+        }
+        conn.commit()?;
+        database.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(Self(database))
     }
 
     pub fn put(&mut self, d: &Device, secret: &[u8]) -> Result<()> {
@@ -115,6 +242,25 @@ impl Store {
         .collect()
     }
 
+    /// One SQLite read snapshot binds credentials to the target/revision that
+    /// selected them, including writes from another CLI process.
+    pub fn poll_targets(&self) -> Result<Vec<PollTarget>> {
+        let mut q=self.0.prepare("SELECT d.config,CASE WHEN json_extract(d.config,'$.primary_protocol')='snmp' THEN COALESCE(p.secret,X'') ELSE d.secret END,d.revision,r.epoch FROM devices d CROSS JOIN snmp_runtime r LEFT JOIN protocol_secrets p ON p.device=d.id AND p.purpose='snmp_poll' WHERE r.id=1 ORDER BY d.id")?;
+        let rows = q.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (config, secret, revision, epoch) = row?;
+            Ok((serde_json::from_str(&config)?, secret, revision, epoch))
+        })
+        .collect()
+    }
+
     pub fn get(&self, id: &str) -> Result<Option<(Device, Vec<u8>, i64)>> {
         let raw: Option<(String, Vec<u8>, i64)> = self
             .0
@@ -135,6 +281,17 @@ impl Store {
         revision: Option<i64>,
         actor: &str,
     ) -> Result<()> {
+        self.save_admin_with_snmp(d, secret, revision, actor, None)
+    }
+
+    pub fn save_admin_with_snmp(
+        &mut self,
+        d: &Device,
+        secret: &[u8],
+        revision: Option<i64>,
+        actor: &str,
+        credentials: Option<&[crate::snmp::persistence::SealedUpdate]>,
+    ) -> Result<()> {
         d.validate()?;
         let tx = self
             .0
@@ -150,11 +307,64 @@ impl Store {
             existing.as_ref().map(|x| x.1) == revision,
             crate::dsm::BoundaryError("device_conflict")
         );
-        let changed_target = existing
+        let old_device = existing
             .as_ref()
             .map(|x| serde_json::from_str::<Device>(&x.0))
-            .transpose()?
-            .is_some_and(|old| old.endpoint != d.endpoint);
+            .transpose()?;
+        let changed_target = old_device
+            .as_ref()
+            .is_some_and(|old| old.primary_target_changed(d));
+        use crate::snmp::{persistence, secrets::Purpose};
+        anyhow::ensure!(
+            revision.is_none_or(|r| (0..i64::MAX / 4).contains(&r)),
+            "invalid device revision"
+        );
+        anyhow::ensure!(
+            d.primary_protocol != PrimaryProtocol::Snmp || secret.is_empty(),
+            "SNMP device must not carry a Redfish password"
+        );
+        if let Some(updates) = credentials {
+            anyhow::ensure!(
+                updates.len() == 2
+                    && updates[0].0 == Purpose::SnmpPoll
+                    && updates[1].0 == Purpose::SnmpTraps,
+                "invalid credential update set"
+            );
+        }
+        for purpose in [Purpose::SnmpPoll, Purpose::SnmpTraps] {
+            let existing_secret: Option<Vec<u8>> = tx
+                .query_row(
+                    "SELECT secret FROM protocol_secrets WHERE device=?1 AND purpose=?2",
+                    params![d.id, purpose.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let cipher = match credentials {
+                Some(updates) => updates.iter().find(|u| u.0 == purpose).unwrap().1.as_ref(),
+                None => {
+                    anyhow::ensure!(
+                        existing_secret.is_none()
+                            || old_device
+                                .as_ref()
+                                .is_some_and(|old| persistence::scope_equal(old, d, purpose)),
+                        "explicit SNMP credential update required"
+                    );
+                    existing_secret.as_ref()
+                }
+            };
+            anyhow::ensure!(
+                cipher.is_none_or(|c| c.len() >= 28
+                    && c.len() <= 8192
+                    && persistence::security(d, purpose).is_some()),
+                "invalid protocol credential envelope"
+            );
+            let required = d.enabled
+                && match purpose {
+                    Purpose::SnmpPoll => d.primary_protocol == PrimaryProtocol::Snmp,
+                    Purpose::SnmpTraps => d.snmp_traps.as_ref().is_some_and(|c| c.enabled),
+                };
+            anyhow::ensure!(!required || cipher.is_some(), "SNMP credentials required");
+        }
         if revision.is_some() {
             tx.execute(
                 "UPDATE devices SET config=?2,secret=?3,revision=revision+1 WHERE id=?1",
@@ -166,7 +376,22 @@ impl Store {
                 params![d.id, serde_json::to_string(d)?, secret],
             )?;
         }
+        if let Some(updates) = credentials {
+            for (purpose, cipher) in updates {
+                if let Some(cipher) = cipher {
+                    tx.execute("INSERT INTO protocol_secrets(device,purpose,secret,revision) VALUES(?1,?2,?3,?4) ON CONFLICT(device,purpose) DO UPDATE SET secret=excluded.secret,revision=excluded.revision", params![d.id,purpose.as_str(),cipher,revision.unwrap_or(0)+1])?;
+                } else {
+                    tx.execute(
+                        "DELETE FROM protocol_secrets WHERE device=?1 AND purpose=?2",
+                        params![d.id, purpose.as_str()],
+                    )?;
+                }
+            }
+        }
+        persistence::invalidate(&tx)?;
         if changed_target {
+            tx.execute("DELETE FROM component_identity WHERE device=?1", [&d.id])?;
+            tx.execute("DELETE FROM observation_evidence WHERE device=?1", [&d.id])?;
             tx.execute(
                 "UPDATE devices SET last_poll=NULL,snapshot=NULL,logs_initialized=0 WHERE id=?1",
                 [&d.id],
@@ -214,6 +439,7 @@ impl Store {
         tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[id])?;
         tx.execute("DELETE FROM alarm_state WHERE device=?1", [id])?;
         tx.execute("DELETE FROM hardware_logs WHERE device=?1", [id])?;
+        crate::snmp::persistence::invalidate(&tx)?;
         tx.execute("DELETE FROM devices WHERE id=?1", [id])?;
         tx.execute("INSERT INTO audit_log(actor,action,device,outcome,created) VALUES(?1,'device.delete',?2,'ok',?3)",params![actor,id,crate::now()])?;
         tx.commit()?;
@@ -263,9 +489,40 @@ impl Store {
         now: i64,
         revision: Option<i64>,
     ) -> Result<bool> {
+        self.apply_revision_epoch(d, snapshot, now, revision, None)
+    }
+
+    pub fn apply_revision_epoch(
+        &mut self,
+        d: &Device,
+        snapshot: &Snapshot,
+        now: i64,
+        revision: Option<i64>,
+        epoch: Option<i64>,
+    ) -> Result<bool> {
+        self.apply_poll(d, snapshot, now, revision, epoch, None)
+    }
+
+    pub fn apply_poll(
+        &mut self,
+        d: &Device,
+        snapshot: &Snapshot,
+        now: i64,
+        revision: Option<i64>,
+        epoch: Option<i64>,
+        started_sequence: Option<i64>,
+    ) -> Result<bool> {
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(expected) = epoch {
+            if tx.query_row("SELECT epoch FROM snmp_runtime WHERE id=1", [], |r| {
+                r.get::<_, i64>(0)
+            })? != expected
+            {
+                return Ok(false);
+            }
+        }
         if let Some(expected) = revision {
             let current: Option<i64> = tx
                 .query_row("SELECT revision FROM devices WHERE id=?1", [&d.id], |r| {
@@ -276,6 +533,19 @@ impl Store {
                 return Ok(false);
             }
         }
+        crate::snmp::integration::persist_inventory(&tx, d, snapshot, revision.unwrap_or(0))?;
+        let mut effective = snapshot.clone();
+        crate::snmp::network::assess(&tx, d, &mut effective, revision.unwrap_or(0), now)?;
+        crate::snmp::hpe::assess(&tx, d, &mut effective, revision.unwrap_or(0))?;
+        crate::snmp::integration::guard_poll(
+            &tx,
+            d,
+            &mut effective,
+            revision.unwrap_or(0),
+            started_sequence,
+            now,
+        )?;
+        let snapshot = &effective;
         for (alias, canonical) in &snapshot.resource_aliases {
             if alias != canonical && snapshot.observations.iter().any(|o| &o.key == canonical) {
                 merge_alarm_alias(&tx, &d.id, alias, canonical)?;
@@ -286,157 +556,30 @@ impl Store {
         }
         let boundary: i64 =
             tx.query_row("SELECT COALESCE(MAX(id),0) FROM events", [], |r| r.get(0))?;
-        let previous_raw: Option<String> =
-            tx.query_row("SELECT snapshot FROM devices WHERE id=?1", [&d.id], |r| {
-                r.get(0)
-            })?;
-        let previous_snapshot: Option<Snapshot> = previous_raw
-            .map(|raw| serde_json::from_str(&raw))
-            .transpose()?;
-        let acknowledged_before =
-            crate::acknowledgement::evaluate(&tx, &d.id, previous_snapshot.as_ref())?
-                .acknowledged();
-        crate::acknowledgement::signatures(&tx, &d.id, snapshot, now)?;
-        let mut q = tx.prepare("SELECT key,health FROM alarm_state WHERE device=?1")?;
-        let previous = q
-            .query_map([&d.id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
-            .map(|row| {
-                let (key, raw) = row?;
-                Ok((key, serde_json::from_str::<Health>(&raw)?))
-            })
-            .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-        drop(q);
-        let mut states = previous.clone();
-        for o in &snapshot.observations {
-            if o.health != Health::Unknown {
-                states.insert(o.key.clone(), o.health);
-            }
+        let groups = crate::alarm::reduce(&tx, d, snapshot, now)?;
+        let new_events: Vec<i64> = {
+            let mut q = tx.prepare("SELECT id FROM events WHERE device=?1 AND id>?2")?;
+            let result = q
+                .query_map(params![d.id, boundary], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            result
+        };
+        for id in new_events {
+            crate::snmp::integration::annotate(
+                &tx,
+                id,
+                if d.primary_protocol == PrimaryProtocol::Snmp {
+                    "snmp_poll"
+                } else {
+                    "redfish"
+                },
+                snapshot.snmp.as_ref().is_none_or(|m| m.engine_id.is_some()),
+                false,
+                None,
+                None,
+            )?;
         }
-        let groups = crate::correlation::groups(&snapshot.resources, &states);
-        let old_groups = previous_snapshot
-            .as_ref()
-            .map(|s| s.notification_groups.clone())
-            .unwrap_or_default();
-        for observation in &snapshot.observations {
-            apply_observation(&tx, d, observation, now)?;
-        }
-        // If a formerly grouped summary remains faulty after its component clears,
-        // announce it immediately, even if its raw severity has not changed.
-        for parent in old_groups.keys().filter(|key| !groups.contains_key(*key)) {
-            if let Some(o) = snapshot.observations.iter().find(|o| {
-                &o.key == parent && matches!(o.health, Health::Warning | Health::Critical)
-            }) {
-                let emitted: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM events WHERE device=?1 AND key=?2 AND id>?3)",
-                    params![d.id, parent, boundary],
-                    |r| r.get(0),
-                )?;
-                if !emitted {
-                    event(
-                        &tx,
-                        d,
-                        parent,
-                        "alarm",
-                        o.health,
-                        &format!(
-                            "{} (kein zugeordneter Komponentenfehler mehr bekannt)",
-                            o.label
-                        ),
-                        now,
-                    )?;
-                    tx.execute(
-                        "UPDATE alarm_state SET emitted=?3 WHERE device=?1 AND key=?2",
-                        params![d.id, parent, now],
-                    )?;
-                }
-            }
-        }
-        // A fresh faulty summary may corroborate a retained component alarm when
-        // the powered-off BMC cannot assess that component. Remind only when due,
-        // without refreshing its last-confirmed timestamp or claiming a new reading.
-        if let Some(interval) = d.repeat_seconds {
-            let anchors: std::collections::BTreeSet<_> = groups
-                .iter()
-                .filter(|(parent, _)| {
-                    snapshot.observations.iter().any(|o| {
-                        &o.key == *parent && matches!(o.health, Health::Critical | Health::Warning)
-                    })
-                })
-                .flat_map(|(_, keys)| keys.iter().cloned())
-                .collect();
-            for anchor in anchors {
-                let current = snapshot
-                    .observations
-                    .iter()
-                    .find(|o| o.key == anchor)
-                    .map(|o| o.health)
-                    .unwrap_or(Health::Unknown);
-                if current != Health::Unknown || groups.contains_key(&anchor) {
-                    continue;
-                }
-                let state: Option<(String, String, Option<i64>)> = tx
-                    .query_row(
-                        "SELECT health,label,emitted FROM alarm_state WHERE device=?1 AND key=?2",
-                        params![d.id, anchor],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                    )
-                    .optional()?;
-                if let Some((raw, label, last)) = state {
-                    let health: Health = serde_json::from_str(&raw)?;
-                    if matches!(health, Health::Warning | Health::Critical)
-                        && last.is_some_and(|last| now - last >= interval)
-                    {
-                        let id = event(&tx, d, &anchor, "repeat", health, &label, now)?;
-                        let description = if health == Health::Critical {
-                            "kritisch"
-                        } else {
-                            "Warnung"
-                        };
-                        tx.execute("UPDATE events SET message=?2 WHERE id=?1",params![id,format!("{}: Gespeicherter Hardwarefehler (zuletzt {description}, aktuell nicht bewertbar): {}. Zugeordneter Sammelzustand weiterhin gestört.",d.name,label)])?;
-                        tx.execute(
-                            "UPDATE events SET message_context=?2 WHERE id=?1",
-                            params![
-                                id,
-                                serde_json::to_string(
-                                    &json!({"version":1,"label":label,"retained":true})
-                                )?
-                            ],
-                        )?;
-                        tx.execute(
-                            "UPDATE alarm_state SET emitted=?3 WHERE device=?1 AND key=?2",
-                            params![d.id, anchor, now],
-                        )?;
-                    }
-                }
-            }
-        }
-        for (parent, anchors) in &groups {
-            group_notifications(&tx, &d.id, parent, anchors, boundary)?;
-        }
-        // Recovery summaries are bundled only when all previously associated
-        // component faults have a confirmed recovery in this same poll.
-        for (parent, anchors) in &old_groups {
-            if snapshot
-                .observations
-                .iter()
-                .any(|o| &o.key == parent && o.health == Health::Ok)
-                && anchors.iter().all(|key| {
-                    previous
-                        .get(key)
-                        .is_some_and(|h| matches!(h, Health::Warning | Health::Critical))
-                        && snapshot
-                            .observations
-                            .iter()
-                            .any(|o| &o.key == key && o.health == Health::Ok)
-                })
-            {
-                group_notifications(&tx, &d.id, parent, anchors, boundary)?;
-            }
-        }
-        crate::acknowledgement::signatures(&tx, &d.id, snapshot, now)?;
-        crate::acknowledgement::suppress(&tx, &d.id, snapshot, boundary, &acknowledged_before)?;
+
         let mut snapshot = snapshot.clone();
         snapshot.notification_groups = groups;
         let initialized: bool = tx.query_row(
@@ -462,6 +605,22 @@ impl Store {
                     &log.message,
                     now,
                 )?;
+                crate::snmp::integration::annotate(
+                    &tx,
+                    event_id,
+                    if d.primary_protocol == PrimaryProtocol::Snmp {
+                        "snmp_poll"
+                    } else {
+                        "redfish"
+                    },
+                    snapshot.snmp.as_ref().is_none_or(|s| s.engine_id.is_some()),
+                    false,
+                    None,
+                    log.identity.as_ref().and_then(|i| i.occurrence.as_ref()),
+                )?;
+                if let Some(identity) = &log.identity {
+                    tx.execute("UPDATE events SET message_context=json_set(message_context,'$.log_identity',json(?2)) WHERE id=?1",params![event_id,serde_json::to_string(identity)?])?;
+                }
                 tx.execute(
                     "UPDATE events SET source_created=?2 WHERE id=?1",
                     params![
@@ -499,6 +658,7 @@ impl Store {
             now,
             revision,
             "Management-Abfrage fehlgeschlagen (Netzwerk, TLS, Anmeldung oder Zeitlimit)",
+            None,
         )
     }
 
@@ -514,6 +674,24 @@ impl Store {
             now,
             revision,
             &crate::collector::poll_failure_label(error),
+            None,
+        )
+    }
+
+    pub fn poll_failure_epoch(
+        &mut self,
+        d: &Device,
+        now: i64,
+        revision: i64,
+        epoch: i64,
+        error: &anyhow::Error,
+    ) -> Result<bool> {
+        self.record_poll_error(
+            d,
+            now,
+            Some(revision),
+            &crate::collector::poll_failure_label(error),
+            Some(epoch),
         )
     }
 
@@ -523,10 +701,19 @@ impl Store {
         now: i64,
         revision: Option<i64>,
         label: &str,
+        epoch: Option<i64>,
     ) -> Result<bool> {
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(expected) = epoch {
+            if tx.query_row("SELECT epoch FROM snmp_runtime WHERE id=1", [], |r| {
+                r.get::<_, i64>(0)
+            })? != expected
+            {
+                return Ok(false);
+            }
+        }
         if let Some(expected) = revision {
             let current: Option<i64> = tx
                 .query_row("SELECT revision FROM devices WHERE id=?1", [&d.id], |r| {
@@ -566,6 +753,7 @@ impl Store {
             let parsed: Option<Snapshot> =
                 raw.as_ref().map(|s| serde_json::from_str(s)).transpose()?;
             let evaluation = crate::acknowledgement::evaluate(&self.0, &d.id, parsed.as_ref())?;
+            let mut trap_health: Option<Health> = None;
             for alarm in &mut alarms {
                 let key = alarm["key"].as_str().unwrap().to_owned();
                 let covered = parsed
@@ -588,16 +776,50 @@ impl Store {
                 if let Some(status) = evaluation.statuses.get(&key) {
                     alarm["assessment"] = json!(status);
                 }
+                if let Some(e) = crate::snmp::integration::alarm_evidence(&self.0, &d.id, &key)? {
+                    if d.enabled
+                        && e.active
+                        && e.revision == revision
+                        && !e.conditions.is_empty()
+                        && evaluation
+                            .statuses
+                            .get(&key)
+                            .is_some_and(|s| matches!(s.status.as_str(), "critical" | "warning"))
+                        && trap_health.is_none_or(|h| {
+                            crate::identity::severity(e.health) > crate::identity::severity(h)
+                        })
+                    {
+                        trap_health = Some(e.health);
+                    }
+                    alarm["evidence"] = json!(e);
+                }
             }
             let stale = !d.enabled
                 || last_poll.is_none_or(|p| crate::now() - p > d.stale_after_seconds() as i64);
-            let overall_status = evaluation.overall(parsed.as_ref(), stale);
+            let mut overall_status = evaluation.overall(parsed.as_ref(), stale);
+            if trap_health == Some(Health::Critical) {
+                overall_status = "critical";
+            } else if trap_health == Some(Health::Warning) && overall_status != "critical" {
+                overall_status = "warning";
+            }
+            let last_trap_received: Option<i64> = self.0.query_row(
+                "SELECT MAX(received) FROM snmp_receipts WHERE device=?1",
+                [&d.id],
+                |r| r.get(0),
+            )?;
+
             let acknowledged_count = evaluation
                 .statuses
                 .values()
                 .filter(|s| s.acknowledged)
                 .count();
-            devices.push(json!({"device":d,"revision":revision,"last_poll":last_poll,"poll_timeout_seconds":d.poll_timeout_seconds(),"stale":stale,"snapshot":parsed,"alarms":alarms,"overall_status":overall_status,"alarm_statuses":evaluation.statuses,"acknowledged_count":acknowledged_count}));
+            let has_snmp_poll_secret = self
+                .protocol_secret(&d.id, crate::snmp::secrets::Purpose::SnmpPoll)?
+                .is_some();
+            let has_snmp_traps_secret = self
+                .protocol_secret(&d.id, crate::snmp::secrets::Purpose::SnmpTraps)?
+                .is_some();
+            devices.push(json!({"trap_health":trap_health,"last_trap_received":last_trap_received,"has_snmp_poll_secret":has_snmp_poll_secret,"has_snmp_traps_secret":has_snmp_traps_secret,"device":d,"revision":revision,"last_poll":last_poll,"poll_timeout_seconds":d.poll_timeout_seconds(),"stale":stale,"snapshot":parsed,"alarms":alarms,"overall_status":overall_status,"alarm_statuses":evaluation.statuses,"acknowledged_count":acknowledged_count}));
         }
         let events = self.event_entries(100)?;
         Ok(
@@ -794,7 +1016,7 @@ impl Store {
     }
 }
 
-fn group_notifications(
+pub(crate) fn group_notifications(
     tx: &Transaction<'_>,
     device: &str,
     parent: &str,
@@ -820,7 +1042,9 @@ pub(crate) fn event(
     now: i64,
 ) -> Result<i64> {
     let message_source = message;
-    let detail = if kind == "hardware_log" {
+    let detail = if kind == "snmp_trap" {
+        format!("SNMP-Ereignis: {message}")
+    } else if kind == "hardware_log" {
         message.to_owned()
     } else if key.starts_with("coverage:") {
         format!(
@@ -874,6 +1098,8 @@ pub(crate) fn event(
         ],
     )?;
     let event_id = tx.last_insert_rowid();
+    // Retention may remove every event; identifiers must still never be reused.
+    tx.execute("INSERT INTO counters(name,value) VALUES('events',?1) ON CONFLICT(name) DO UPDATE SET value=MAX(value,excluded.value)",[event_id])?;
     tx.execute(
         "UPDATE events SET message_context=?2 WHERE id=?1",
         params![
@@ -903,7 +1129,7 @@ pub(crate) fn event(
         params![d.id, key],
         |r| r.get(0),
     )?;
-    let gate = if acknowledged && kind != "hardware_log" {
+    let gate = if acknowledged && !matches!(kind, "hardware_log" | "snmp_trap") {
         Some("acknowledged")
     } else if !d.alerts_enabled {
         Some("device_disabled")
@@ -1006,7 +1232,12 @@ fn merge_alarm_alias(
     Ok(())
 }
 
-fn apply_observation(tx: &Transaction<'_>, d: &Device, o: &Observation, now: i64) -> Result<()> {
+pub(crate) fn apply_observation(
+    tx: &Transaction<'_>,
+    d: &Device,
+    o: &Observation,
+    now: i64,
+) -> Result<()> {
     // Unknown or missing values never resolve a known fault and never trigger reminders.
     if o.health == Health::Unknown {
         return Ok(());
@@ -1061,6 +1292,9 @@ mod tests {
     use super::*;
     fn device() -> Device {
         Device {
+            primary_protocol: Default::default(),
+            snmp_poll: None,
+            snmp_traps: None,
             id: "test".into(),
             name: "Test".into(),
             endpoint: "https://ilo.example/".into(),
@@ -1235,6 +1469,7 @@ mod tests {
         let snapshot = Snapshot {
             logs_complete: true,
             logs: vec![HardwareLog {
+                identity: None,
                 fingerprint: "new-log".into(),
                 message: "Historical message".into(),
                 severity: Health::Warning,
@@ -1437,6 +1672,7 @@ mod tests {
         let mut snapshot = Snapshot {
             logs_complete: true,
             logs: vec![HardwareLog {
+                identity: None,
                 fingerprint: "old".into(),
                 message: "old fault".into(),
                 severity: Health::Critical,
@@ -2088,6 +2324,70 @@ mod tests {
         assert_eq!(
             s.pending_mail(100 + 91 * 86400).unwrap().unwrap().outbox,
             pending.outbox
+        );
+    }
+    #[test]
+    fn incomplete_migration_backup_is_not_published_and_retry_keeps_existing_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let database = Connection::open(dir.path().join("monitor.db")).unwrap();
+        database.execute_batch("CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES(1); CREATE TABLE marker(value INTEGER); INSERT INTO marker VALUES(42);").unwrap();
+        let key = dir.path().join("master.key");
+        std::fs::write(&key, [7u8; 31]).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let existing = dir.path().join("pre-snmp-schema1-existing");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::write(existing.join("keep"), b"existing backup").unwrap();
+        assert!(migration_backup(&database, dir.path()).is_err());
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".partial")));
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter(|entry| entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("pre-snmp-schema1-"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read(existing.join("keep")).unwrap(),
+            b"existing backup"
+        );
+        std::fs::write(&key, [7u8; 32]).unwrap();
+        migration_backup(&database, dir.path()).unwrap();
+        let backup = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.is_dir() && *path != existing)
+            .unwrap();
+        assert_eq!(std::fs::read(backup.join("master.key")).unwrap(), [7u8; 32]);
+        let copy = Connection::open(backup.join("monitor.db")).unwrap();
+        assert_eq!(
+            copy.query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            42
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT version FROM schema_version", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            std::fs::metadata(backup.join("monitor.db"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o077,
+            0
         );
     }
 }

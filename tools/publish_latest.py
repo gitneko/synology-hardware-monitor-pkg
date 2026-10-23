@@ -37,6 +37,8 @@ def publish(directory, repository, commit, branch, client=gh):
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Expected a full source commit SHA')
     manifest = json.loads((directory/'build-manifest.json').read_text())
+    if manifest.get('source_dirty'):
+        raise ValueError('Dirty local build cannot be published as a source commit')
     if manifest['commit'] != commit:
         raise ValueError('Build/source commit mismatch')
     sums = {}

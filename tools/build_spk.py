@@ -13,6 +13,7 @@ import re
 import json
 import os
 import time
+import tomllib
 from uninstall_wizard import write_wizards
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -26,6 +27,8 @@ a=p.parse_args()
 info=re.sub(r'^arch="[^"]+"',f'arch="{a.arch}"',(ROOT/f'packaging/INFO.{a.profile}').read_text(),flags=re.M)
 version=re.search(r'^version="([^"]+)"',info,re.M).group(1)
 assert re.fullmatch(r'[0-9A-Za-z.-]+',version), 'Invalid version for versioned UI paths'
+product_version=tomllib.loads((ROOT/'Cargo.toml').read_text())['package']['version']
+assert version.split('-')[0]==product_version, 'Product/INFO version mismatch'
 assert json.loads((a.ui_dist/'ui-build.json').read_text())['version']==version, 'Refusing stale UI build: rebuild Vue for this package version'
 # Static-file validators must change when a release changes. Reproducible builds
 # can supply the release's SOURCE_DATE_EPOCH; never reuse it across releases.
@@ -38,6 +41,7 @@ dynamic=subprocess.check_output(['readelf','-d',str(binary)],text=True)
 assert 'Advanced Micro Devices X86-64' in header, 'Expected x86_64 binary for the selected Synology architecture'
 assert 'INTERP' not in segments and '(NEEDED)' not in dynamic, 'Refusing host-linked binary: build static musl target first'
 assert subprocess.run([str(binary),'dev','--help'],capture_output=True).returncode!=0, 'Refusing a binary with local development authentication'
+assert subprocess.check_output([str(binary),'--version']).strip()==f'hardware-monitor {product_version}'.encode(), 'Refusing stale product binary'
 assert (a.ui_dist/'index.html').is_file(), 'Build Vue UI first'
 a.output.mkdir(parents=True,exist_ok=True)
 

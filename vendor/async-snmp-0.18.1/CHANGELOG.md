@@ -1,0 +1,1066 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.18.1] - 2026-08-19
+
+### Fixed
+
+- Docs.rs builds no longer enable the AWS-LC FIPS backend, whose native build
+  currently attempts to modify dependency sources in the read-only sandbox.
+
+## [0.18.0] - 2026-08-19
+
+### Changed
+
+- The optional `mib` integration now targets mib-rs 0.10 and uses its owned,
+  exact `IndexSchema` codec for table index decoding.
+- Agent construction now has one checked `construction_timeout` spanning UDP
+  bind, configuration-order notification-sink DNS, and local setup after pure
+  validation. Timeout errors retain the bind address and the active sink's
+  configuration index and original destination. Notification streams admit at
+  most `notification_fanout_limit` sink operations at once, refill on
+  completion, and continue to yield completion-order per-sink outcomes.
+- **Breaking:** `CryptoBackend::RustCrypto` and `AwsLcFips` are unconditional
+  identities. The `Unavailable` variant and `Default` trait implementation are
+  removed;
+  `CryptoBackend::default_backend` and `is_compiled` query build capability,
+  and explicit selection of an uncompiled identity returns
+  `CryptoError::BackendNotCompiled`.
+- **Breaking:** `ClientBuilder` stores one `ClientConfig`; `UsmAuthBuilder` and
+  `Auth::usm_builder` are removed. `Auth::usm(username)` remains the direct
+  `noAuthNoPriv` constructor, while credentialed/context USM uses `UsmConfig`
+  and its `From<UsmConfig> for Auth` conversion.
+- **Breaking:** Fixed-cardinality chunk streams own a cloned `Client`; chunked
+  operations therefore require a `'static` transport. `CommunityMessage::new`
+  accepts `CommunityVersion`, so V3 community messages are unrepresentable.
+- **Breaking:** `Agent::cancel()` now initiates cancellation;
+  `Agent::cancellation_token()` is the token accessor and
+  `AgentBuilder::cancellation_token()` installs a caller token.
+  `Oid::to_ber_checked` is removed; `Oid::to_ber` is the sole checked BER
+  content encoder.
+- Received unknown, nonnegative SNMPv1 generic-trap values retain the
+  net-snmp-compatible `snmpTraps.{value + 1}` conversion extension. Structured
+  direct V1 origination continues to reject unknown generic-trap values.
+
+- **Breaking:** Walks now expose exactly two opaque stream types:
+  `WalkStream` for plain bindings and `WalkMetadataStream` for response metadata.
+  `WalkOptions` selects `Auto`, GETNEXT, or GETBULK plus repetitions, ordering,
+  and a result limit as either a client default or per-operation snapshot. The
+  public concrete `Walk`/`BulkWalk` wrappers and exhaustive driver enums are
+  removed; canonical construction uses `walk`, `walk_with`,
+  `walk_with_metadata`, or `walk_with_metadata_and`.
+- Agent request contexts now expose receipt/admission timestamps, an optional
+  absolute deadline measured from receipt, and level-triggered cooperative
+  cancellation. Shutdown defaults to signalling and draining dispatched work;
+  `AgentShutdownPolicy::AbortCancellationSafeRetrievalsAfter` is an explicit
+  cancellation-safety contract that can bound only GET/GETNEXT/GETBULK work.
+  SET cancellation before commit runs asynchronous cleanup, while commit,
+  rollback, and finalization remain protected and agent-owned. Live work
+  retained after a dropped `run` is observable through
+  `Agent::active_request_count` and gates a second run.
+- **Breaking:** `NotificationReceiver::recv` now returns an owning
+  `ReceivedNotification` with source and wire-transmission identity. Traps have
+  no acknowledgement outcome; accepted Informs report `Sent`,
+  `SuppressedBySize`, or the construction, persistence, crypto, timeout, or
+  send failure that occurred after acceptance. Pre-acceptance authoritative
+  persistence failures remain errors from `recv`.
+- `Agent::health` and `Agent::subscribe_health` expose bounded, coalesced
+  authoritative-persistence degradation and recovery state. An outage fails
+  affected local-authoritative V3 processing closed while v1/v2c service and
+  later persistence retries continue.
+- **Breaking:** `Transport` now requires one complete `request_with` exchange
+  hook; the public `recv`, `recv_with`, and `request` split operations are
+  removed. Registrations carry one absolute deadline and bounded normalized
+  correlation aliases, and built-in UDP/TCP transports own setup-before-send,
+  validation, cancellation cleanup, and stream framing for the full exchange.
+- **Breaking:** retry configuration consistently counts retransmissions and is
+  fallible above `MAX_RETRIES` (16). `Retry::fixed` now returns `Result`, zero
+  retries still sends once, zero-delay retries yield, and clients may set an
+  optional `exchange_timeout` covering queueing, writes, rejected candidates,
+  response waits, and backoff. SNMPv3 discovery uses a separate deadline.
+- UDP receive error classification is shared across client, agent, and
+  notification roles. Datagram-local errors are discarded, while each role
+  explicitly chooses whether transient and fatal socket errors back off,
+  terminate the service, or return to the caller.
+- Inform sinks now share one lazily created UDP endpoint per destination
+  address family. Per-sink clients and protocol state remain cached, while
+  same-family sinks no longer retain redundant sockets and receive tasks.
+- Agent UDP receive failures are now classified by scope. Invalid per-datagram
+  metadata is discarded, known transient socket failures are retried with
+  cancellation-aware bounded backoff, and fatal or unknown socket-state errors
+  still terminate `Agent::run`.
+- **Breaking:** GETNEXT/GETBULK handler results are now validated against the
+  `MibHandler` contract. Returned OIDs must be strictly increasing and owned by
+  the producing handler according to `MibHandler::handles`; violations produce
+  `genErr` instead of being silently discarded or accepted across ownership
+  boundaries. Independent handler probes now run with a bounded concurrency of
+  16 while result and error selection remains deterministic in handler order.
+- **Breaking:** v2/v3-to-v1 trap conversion moved from permissive
+  `Pdu::to_v1_trap` to `NotificationPdu::to_v1_trap`. It now returns a
+  validated `TrapV1Notification` result and rejects conversions whose derived
+  enterprise OID or copied values cannot be encoded as SNMPv1.
+- **Breaking:** `TrapV1Pdu::to_v2_pdu` now returns a validated
+  `NotificationPdu` and rejects invalid synthesized trap OIDs or copied
+  variable bindings instead of returning state that fails during encoding.
+- Typed net-snmp Opaque accessors now require the declared extension payload to
+  consume the complete Opaque value. Variable-width integer payloads retain
+  their existing non-minimal encoding compatibility, and raw access is unchanged.
+- `OidTable` now supports bulk construction through `FromIterator`, bulk
+  extension, and owned iteration. Bulk input is sorted and deduplicated once,
+  with the last value for each OID retained.
+- `ErrorStatus::from_i32` is now a pure constant conversion. Unknown or future
+  status values remain available through `ErrorStatus::Unknown` without
+  emitting a warning as a conversion side effect.
+- **Breaking:** Removed the unused `ViewCheckResult` type and
+  `View::check_subtree` method. VACM enforcement continues to use exact
+  per-OID checks, which remain necessary for custom handler ownership.
+- **Breaking:** Replaced `Agent::engine_boots` and `Agent::engine_time` stale
+  snapshots with fallible `Agent::engine_boots_time`, which returns one current
+  coherent pair and surfaces authoritative rollover persistence failures.
+  SNMP-ENGINE-MIB clock reads now use the same source and report `genErr` when
+  the durable clock cannot advance.
+- **Breaking:** Removed the redundant `RawPdu` and `RawTrapV1Pdu` aliases.
+  Decoders continue to return `Pdu` and `TrapV1Pdu`; validated outbound wrapper
+  types remain the invariant boundary for message construction.
+
+- Concurrent ordinary SNMPv3 engine discovery is now a cancellation-safe
+  single-flight operation. Callers share success or structured failure under a
+  bounded total discovery deadline; uncommon errors may use the transparent
+  `Error::SharedOperation` wrapper and remain classifiable through
+  `Error::kind`, `Error::exchange_source`, and `Error::response_metadata`.
+- Agent replies and notification Inform/Report responses now have configurable
+  send deadlines through `AgentBuilder::response_send_timeout` and
+  `NotificationReceiverBuilder::response_send_timeout`, defaulting to five
+  seconds. An accepted Inform response timeout is returned in its
+  acknowledgement outcome and releases the receiver's FIFO turn; agent
+  shutdown drains response attempts only through their bounded deadline.
+- Agent `snmpInASNParseErrs` accounting now covers actual ASN.1/BER decode
+  failures at the message-processing boundary. Unknown versions and decoded
+  SNMPv1 `Counter64` values remain version-semantic failures rather than parse
+  errors.
+
+- **Breaking:** `RequestContext` fields are private and exposed through
+  read-only accessors, preventing callers from constructing or mutating
+  version/security combinations that cannot result from a validated request.
+  The production-public `RequestContext::test_context` constructor is removed.
+  Handler unit tests should keep policy in helpers over explicit inputs; tests
+  that require a complete context should capture one from an in-process
+  `Agent` request.
+- **Breaking:** Secret-bearing `Community`, `Auth`, `UsmConfig`, `UsmUser`,
+  `SecurityName`, `RequestRegistration`, `MasterKey`, and `MasterKeys` no longer
+  implement their previously derived comparison and/or hashing traits
+  (`PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash`, as applicable). Selectors
+  such as protocol, security level, cryptographic backend, and policy enums
+  retain their existing, justified trait sets. `Community::matches` and
+  `SecurityName::matches` provide content-constant-time matching for
+  authentication and authorization without
+  restoring secret-dependent derived equality. Credential cloning remains
+  available where configuration reuse requires it, and library `Debug` output
+  remains redacted.
+- **Breaking:** SNMPv3 engine-cache APIs now separate unauthenticated
+  `DiscoveredEngine` identity/capacity from `AuthenticatedEngineTime`.
+  Trust-establishing `EngineState` constructors and timeliness mutations are
+  internal; public cache population uses `insert_discovered` or the explicitly
+  attested, fallible `seed_authenticated`. Authenticated publication restores
+  mappings removed by expiry, capacity eviction, `remove`, or `clear` without
+  weakening generation/identity race checks, and shared per-engine high-water
+  time remains monotonic across same-identity capacity replacement.
+- **Breaking:** `Auth::usm` now accepts username octets and returns `Auth`
+  directly, consistently with `Auth::v1` and `Auth::v2c`. Credentialed,
+  private, context-specific, and precomputed-key configurations use
+  `UsmConfig`. USM username diagnostics preserve exact
+  octets instead of applying lossy UTF-8 conversion.
+- **Breaking:** VACM access rows are keyed by the RFC 3415
+  `(groupName, contextPrefix, securityModel, securityLevel)` index.
+  `VacmConfig::add_access` and `VacmBuilder::build` now reject duplicate rows;
+  `replace_access` provides explicit insert-or-replace semantics. Security
+  model and level are fixed when `AccessEntryBuilder` is constructed;
+  `VacmBuilder::access`/`replace_access` supply those values and the nested
+  setters are removed. Access selection now gives RFC preference to a context
+  prefix identical to the requested context name, independently of the row's
+  exact/prefix matching column.
+- **Breaking:** `ClientBuilder::new` now takes authentication only and contains
+  protocol/client policy. `ClientBuilder::target` produces a
+  `TargetClientBuilder` for built-in UDP/TCP construction, including target,
+  strict-source, and construction-timeout policy. Any already-created
+  `Transport` implementation, including `TcpTransport`, `UdpHandle`,
+  `BuiltinTransport`, and custom transports, uses
+  `ClientBuilder::build_with_transport` without a placeholder target. A shared
+  `UdpTransport` socket owner instead uses `TargetClientBuilder::build_with` to
+  resolve the target and derive its per-target handle.
+- **Breaking:** Notification acceptance policies now receive a borrowed
+  `NotificationEnvelope` containing source, community or USM security,
+  context, class, uptime, trap OID, application varbinds, request ID, and decode
+  anomalies. Policies return `NotificationAcceptance`; evaluation occurs after
+  applicable protocol authentication/decryption and prefix validation but
+  before an Inform response attempt or delivery. Rejection, policy error, and
+  panic withhold the response. Acceptance attempts the response before
+  delivery, except response-size finalization can increment `snmpSilentDrops`
+  and still deliver without sending one. V1/v2c community/content remain
+  cleartext, and v3 identity/context/content are authenticated only at
+  authNoPriv/authPriv; `accept_all_notifications` also accepts spoofable
+  noAuthNoPriv input.
+- **Breaking:** `MibHandler::test_set` now returns a request-owned opaque
+  `PreparedSet` for each accepted varbind. Commit, undo, and free operate on
+  that state directly, removing the need for handler side tables. Explicit
+  async undo, free, and successful finalization callbacks perform normal
+  protocol cleanup. `Drop` provides idempotent synchronous reservation and
+  resource cleanup if a request is cancelled or panics; it cannot await
+  rollback or guarantee transactional atomicity after commit has started.
+  Test, commit, and undo callbacks use distinct result/error types so each can
+  only express statuses valid for its phase; test-phase backend failures map
+  explicitly to `genErr`.
+- Generated engine IDs now contain 17 opaque random octets instead of using
+  documentation-only PEN 32473. Applications that use RFC 3411's recommended
+  enterprise-specific layout should configure a stable engine ID under their
+  own IANA-assigned enterprise number.
+- **Breaking:** `SaltCounter::new` and `generate_engine_id` now return `Result`,
+  `SaltCounter` no longer implements `Default`, and the unused
+  `CryptoError::RandomSource` variant is replaced by `Error::RandomSource`.
+  Privacy salt counters are initialized only for `authPriv` configurations;
+  request-ID and retry-jitter seeds use warned deterministic fallbacks when OS
+  entropy is unavailable.
+- **Breaking:** `AgentBuilder::trap_sink` now requires a stable caller-supplied
+  `NotificationSinkId`; construct one with fallible `new` or `TryFrom` before
+  adding the sink. IDs retain 1-32 opaque octets, including non-UTF-8 values,
+  and invalid lengths return `NotificationSinkIdError`. Duplicate IDs are
+  rejected during agent construction.
+  `Agent::notification_sinks` exposes cloneable, credential-free
+  `NotificationSinkSummary` values in configuration order, and each
+  `SinkOutcome` carries the same summary instead of a destination-only identity.
+  `Agent::send_trap_stream` and `Agent::send_inform_stream` return lazy
+  `NotificationSendStream` values that expose per-sink outcomes in completion
+  order. Trap and Inform sink operations are driven concurrently; aggregate
+  sends still return outcomes in sink configuration order.
+- **Breaking:** UDP endpoint observation and lifecycle authority are separate.
+  `UdpStats` replaces `TransportStats` with counter names matching their
+  increment paths. `UdpHandle`, UDP clients, transports, and `UdpControl`
+  expose shared read-only statistics. `UdpControl` is the cloneable,
+  endpoint-wide shutdown capability available through `UdpTransport::control`
+  and `TargetClientBuilder::connect_with_control`; direct `UdpTransport::shutdown`
+  is removed. Completed shutdown prevents later registration and socket I/O.
+- **Breaking:** `UdpTransport::handle` now returns `Result<UdpHandle>` and rejects
+  native IPv6 targets for IPv4 sockets during construction. IPv4-mapped targets
+  are normalized for IPv4 sockets, and `TargetClientBuilder::build_with` considers all
+  resolved addresses in order until one is compatible with the shared socket.
+- **Breaking:** Request and construction deadlines are now independent.
+  `ClientBuilder::request_timeout`, `ClientConfig::request_timeout`, and
+  `DEFAULT_REQUEST_TIMEOUT` replace the former timeout names. The builder-only
+  `TargetClientBuilder::construction_timeout` defaults to
+  `DEFAULT_CONSTRUCTION_TIMEOUT` (five
+  seconds) and applies one absolute deadline across resolution, UDP bind, and
+  TCP connect. Construction expiry reports the original `Target` and active
+  `ConstructionStage`. `TcpTransportBuilder::connect_timeout` replaces its
+  former setter; preconfigured and unbounded low-level transports remain
+  available as deadline-policy escape hatches.
+- Bounded walks now inspect exactly one look-ahead candidate after yielding the
+  configured limit. Definite truncation ends with
+  `WalkAbortReason::ResultLimitExceeded`; observed natural completion remains a
+  normal end-of-stream. GETNEXT probes stay GETNEXT, while GETBULK uses a
+  buffered binding or an additional request with `max_repetitions = 1`.
+- **Breaking:** The default feature set now contains only `crypto-rustcrypto`.
+  Agent support is opt-in and remains independent of both additive crypto
+  providers; client, notification, and noAuthNoPriv APIs remain unconditional.
+- **Breaking:** The SNMPv3 wire enum is now `message::V3SecurityModel`, while
+  `handler::SecurityModel` represents only concrete V1, V2c, and USM request
+  identities. VACM wildcard selectors now use
+  `VacmSecurityModel::{Any, Exact(SecurityModel)}`; VACM builders accept a
+  concrete `SecurityModel` directly for exact matches.
+- **Breaking:** Removed the unimplemented `tls` and `dtls` features and the
+  speculative `AgentTransport` trait. `UdpTransportConfig` is now private;
+  configure UDP transports through `UdpTransportBuilder`. Handler APIs are now
+  available only with the `agent` feature.
+- **Breaking:** SNMPv3 protocol and USM support are unconditional; the standalone
+  `v3` feature is removed. Crypto backend features are optional and additive,
+  and `--all-features` is supported. `UsmConfig` carries an observable
+  `CryptoBackend` selection; RustCrypto remains the default when both are
+  compiled and AWS-LC FIPS must be selected explicitly. Backend-free community,
+  SNMPv3, and CLI builds compile; password credentials fail configuration
+  validation when no selected backend is available. The CLI exposes explicit
+  backend selection. `CryptoError` gains `InvalidHmacTruncationLength` for
+  invalid primitive output requests.
+- Notification receivers now expose `NotificationVarbindValidation` through
+  `NotificationReceiverBuilder::varbind_validation()`. The default tolerant
+  policy accepts non-standard first/second varbind names when their values are
+  usable, while strict mode requires the RFC names and order; rejected Informs
+  are not acknowledged.
+- **Breaking:** Walk collectors no longer issue a scalar GET after an empty
+  GETNEXT/GETBULK walk. Inherent `next`/`collect`, direct stream polling, and
+  `StreamExt` consumers now observe the same walk results and request sequence;
+  callers retrieving a scalar instance OID must use `Client::get` explicitly.
+- **Breaking:** Caller-facing GETBULK parameters now use `u32`.
+  `Pdu::get_bulk`, `Client::bulk_walk`, and `Client::bulk_walk_default` are
+  fallible, and values above `i32::MAX` are rejected before request allocation,
+  stream construction, or transport I/O. `ClientConfig::max_repetitions` is
+  validated when the client is constructed rather than saturated on use.
+- **Breaking:** Raw `MasterKey` and `LocalizedKey` constructors now return
+  `Result` and require exactly the selected authentication protocol's digest
+  length. `PrivKey::encrypt` now requires an explicit `&SaltCounter`; privacy
+  keys no longer own implicit clone-local salt state. One counter must be shared
+  by all encryptions in an authoritative engine/key domain.
+- **Breaking:** `Agent::send_trap()` and `Agent::send_inform()` now return a
+  `NotificationOutcome` with a `SinkStatus` for every configured sink. Inform
+  sinks using SNMPv1 are reported as explicitly skipped, so an all-skipped send
+  is not reported as successful. The `_detailed` methods were removed; callers
+  that intentionally want warn-and-discard behavior can use
+  `send_trap_best_effort()` and `send_inform_best_effort()`.
+- **Breaking:** `ClientConfig` now uses one authoritative `auth: Auth` field
+  instead of independent `version`, `community`, and `v3_security` fields.
+  `Client::new` and `Client::with_engine_cache` now return `Result` and reject
+  zero request batch sizes, SNMPv1 forced GETBULK walks, and unbounded relaxed
+  OID ordering before I/O. `ClientBuilder::build_with_transport` constructs a
+  validated client around any already-created `Transport` implementation;
+  preconstructed shared `UdpTransport` socket owners continue to use
+  `TargetClientBuilder::build_with` to create a per-target `UdpHandle`.
+- SNMPv1/v2c responses now require byte-for-byte community equality by default,
+  even when UDP source checking is permissive. Rejected responses leave the
+  pending request and original deadline intact. Explicit target-only and
+  any-source community rewrite policies support proxy deployments; accepted
+  anomalies are warned and rejected packets count as unmatched.
+- The pre-1.0 transport request boundary now accepts `RequestRegistration`
+  correlation metadata. Its primary ID, timeout, aliases, and protocol
+  correlation fields are private; construct it with `community` (using
+  `CommunityVersion`) or `v3`, add normalized aliases with `with_aliases`, and
+  inspect the request ID, timeout, and aliases through read accessors. The
+  read-only `evaluate_response_identity` method applies outer-ID/alias,
+  protocol-version, source, and community-policy correlation from packet bytes.
+  Custom transports must ignore a failed identity or candidate validation
+  without consuming the pending request or extending its original deadline.
+- **Breaking:** `ClientConfig`, `DecodeConfig`, and `TcpOptions` are
+  non-exhaustive configuration structs. Prefer their builders where available,
+  or start with `Default`/the documented policy constants and mutate public
+  fields. No protocol, operation/response, authentication, target, or transport
+  enums were made non-exhaustive.
+- **Breaking:** Removed the pre-1.0 `GetResult::from_option`,
+  `GetNextResult::from_option`/`into_option`, both `From<Option<_>>` result
+  conversions, the unused `handler::Response`, and the nested
+  `agent::vacm::SecurityModel` re-export. Choose exception variants explicitly;
+  `From<Value>`, `From<VarBind>`, the crate-root and `handler::SecurityModel`
+  paths, boxed `Result<T>`, and `Oid::to_ber_checked` remain available.
+- Outbound OBJECT IDENTIFIER encoding is now checked. `Oid::to_ber`,
+  `EncodeBuf::push_oid`, `Value::encode`, `VarBind::encode`, PDU encoders,
+  `CommunityMessage::encode`, `ScopedPdu::encode`/`encode_to_bytes`, and
+  `V3Message::encode` now return `Result`. Empty, malformed, overlength, or
+  non-round-trippable OIDs return `Error::InvalidOid` before transport I/O,
+  encryption, or authentication. Receive-side empty OIDs and in-memory tree
+  operations remain supported.
+- **Breaking:** `EncodeBuf::push_constructed`, `push_sequence`, and
+  `push_octet_string` now return representability errors. The parallel
+  `try_push_constructed`, `try_push_sequence`, and `try_push_octet_string`
+  methods are removed; constructed encoding rolls back on nested or length
+  failure.
+- `EngineCache` now repairs poisoned or partially mutated state by clearing
+  target mappings and authenticated-time high-water state together. Cache
+  operations report the repaired state, and `recovery_count` exposes the
+  monotonic number of recoveries.
+- **Breaking:** `DecodeConfig` replaces `DecodePolicy` and
+  `CompatibilityPolicy` with one permissive-by-default configuration and a
+  `STRICT` preset. `Message`, `CommunityMessage`, `V3Message`,
+  `RawV3Message`, and `UsmSecurityParams` expose one configurable `decode`
+  method returning `DecodeOutcome`; bare-value and policy-matrix decode methods
+  are removed. Client, agent, and notification-receiver builders now use only
+  `decode_config`, and agent `RequestContext` exposes accepted request
+  anomalies after protocol security processing.
+- **Breaking:** `PrivProtocol::Aes192` and `Aes256` are replaced by explicit
+  `Aes192Blumenthal`, `Aes192Reeder`, `Aes256Blumenthal`, and `Aes256Reeder`
+  key-extension variants. Configuration strings must likewise select
+  `AES-192-BLUMENTHAL`, `AES-192-REEDER`, `AES-256-BLUMENTHAL`, or
+  `AES-256-REEDER`; the ambiguous old strings are rejected. `CISCO` is accepted
+  as a parsing synonym for `REEDER`, while display uses the canonical `REEDER`
+  name. Dialects remain equivalent when localization already supplies enough
+  key bytes or callers provide finalized raw privacy keys.
+- **Breaking:** DES and 3DES sending now requires caller-owned durable
+  `DesSaltState`. Install or atomically restart a persisted local
+  generating-engine boots epoch before constructing a client, agent, or
+  notification receiver, then share state clones across every live sender in
+  the same localized key/pre-IV domain. The old generic `PrivKey::encrypt` is
+  replaced by protocol-specific `encrypt_des_family` and `encrypt_aes` methods;
+  DES no longer uses remote authoritative boots or the wrapping AES counter.
+
+### Fixed
+
+- BER length encoding now rejects host lengths above `u32::MAX` instead of
+  truncating them; `encode_length` and `EncodeBuf::push_length` are fallible.
+- USM report counters wrap as Counter32 values, V3 discovery timeout errors
+  report total elapsed time and configured retries, and retry jitter is seeded
+  once per process from the OS random source while respecting its delay cap.
+- CLI verbose/debug metadata redacts community strings. `asnmp-set` documents
+  and enforces the ten-varbind atomic request limit before network I/O.
+- Built-in HMAC operations now reject truncation lengths greater than the
+  selected digest length instead of panicking while slicing the generated tag.
+- Authenticated SNMPv1 GET, GETNEXT, and SET requests carrying Counter64 values
+  are now silently dropped and counted by `Agent::snmp_in_asn_parse_errs()`.
+- SET commit failure now undoes every attempted binding, including the failed
+  attempt, and frees later tested reservations whose commit was not attempted.
+  Cleanup continues after an undo failure.
+
+### Migration
+
+- Replace `EncodeBuf::try_push_constructed`, `try_push_sequence`, and
+  `try_push_octet_string` with their `push_*` equivalents and propagate the
+  returned `Result`.
+- Replace `DecodePolicy`, `CompatibilityPolicy`, `decode_with_*`, and
+  `decode_strict` usage with `DecodeConfig`. Pass a config to `decode` and read
+  the decoded value through `DecodeOutcome::value`; configure network roles
+  with their `decode_config` builder method.
+- Replace `PrivProtocol::Aes192`/`Aes256` and `AES-192`/`AES-256` configuration
+  with an explicit Blumenthal or Reeder variant. Existing async-snmp-derived
+  keys used Blumenthal; Cisco/Reeder deployments should select Reeder.
+- Create `DesSaltState` with `install` for a new key domain or `restart` from
+  `PersistedDesSaltState` on startup. The persistence callback must perform an
+  atomic install/compare-and-set so a second live owner cannot lease the same
+  boots epoch. Supply it through the client, agent, or notification-receiver
+  `des_salt_state` builder method.
+
+- Replace direct `EngineState` construction, field access, `EngineCache::insert`,
+  and `EngineState::update_time` with
+  `DiscoveredEngine::new(engine_id, msg_max_size)` and
+  `EngineCache::insert_discovered`. Applications restoring independently
+  authenticated persistence should call `EngineCache::seed_authenticated` and
+  handle its `Result`; engine boots zero is accepted, while boots/time above
+  `MAX_ENGINE_TIME` remain invalid. Read cached identity/capacity through
+  `EngineState::engine_id` and `msg_max_size`, and authenticated state through
+  `authenticated_time`.
+- **Client fixed-cardinality responses:** `get`, `get_many`, `get_next`,
+  `get_next_many`, `set`, and `set_many` now return
+  `FixedCardinalityResponse` rather than a bare `Vec<VarBind>`/single binding.
+  Extract received bindings through `.varbinds` and inspect `.anomalies` before
+  assuming positional correspondence:
+
+  ```rust
+  let response = client.get_many(&oids).await?;
+  if !response.anomalies.is_empty() {
+      eprintln!("response-shape anomalies: {:?}", response.anomalies);
+  }
+  for varbind in response.varbinds {
+      println!("{} = {:?}", varbind.oid, varbind.value);
+  }
+  ```
+
+  Compatible mode preserves bounded malformed-response evidence in both fields.
+  To retain the old fail-fast expectation, configure
+  `Client::builder(...).response_shape_policy(ResponseShapePolicy::Strict)`;
+  shape failures then return `Error::ResponseShape` with the received bindings
+  and diagnostics.
+- Replace handler `Option` conversions with explicit `GetResult` and
+  `GetNextResult` variants. Use `GetResult::Value(value)` or `value.into()` for
+  present GET values, choose `NoSuchObject` versus `NoSuchInstance` for absent
+  values, and use `GetNextResult::Value(varbind)`/`varbind.into()` or
+  `EndOfMibView` for GETNEXT. Remove uses of the unused handler-level
+  `Response`, and import `SecurityModel` from the crate root or `handler`.
+- Replace external struct literals for `ClientConfig`, `DecodeConfig`,
+  and `TcpOptions` with `Default` plus public-field mutation, or use the
+  preferred builders.
+- Handle the `Result` from `MasterKey::from_bytes` and
+  `LocalizedKey::from_bytes`, and provide exact Ku/Kul digest output rather than
+  an arbitrary HMAC key. Create one owner-held `SaltCounter` for each
+  authoritative engine/key domain and pass it to every `PrivKey::encrypt` call;
+  cloned or re-derived privacy keys use the same counter.
+- Replace `send_trap_detailed()` and `send_inform_detailed()` with
+  `send_trap()` and `send_inform()`, and match each `SinkOutcome.status` as
+  `Succeeded`, `Failed(error)`, or `Skipped(reason)`. Code that deliberately
+  discards outcomes should call the corresponding `_best_effort()` method.
+
+## [0.17.0] - 2026-08-06
+
+### Added
+
+- `Client::rediscover_engine()` provides an explicit, transactional way to
+  replace an established SNMPv3 engine identity after a device is replaced or
+  reconfigured. A failed or cancelled rediscovery leaves the previous identity,
+  localized keys, and shared-cache mapping intact.
+- `ReportStatus`, `MalformedReport`, and `classify_report()` provide exact-shape,
+  typed SNMPv3 Report handling. Terminal Reports are returned as
+  `Error::Report` instead of being collapsed into authentication or generic
+  SNMP errors.
+- `ClientBuilder::strict_source()` applies the existing opt-in UDP source check
+  to discovery and ordinary exchanges created through `connect()` or
+  `build_with()`.
+- `ClientBuilder::allow_unauthenticated_v3_time_correction()` and the matching
+  `ClientConfig` field enable a default-off compatibility path for devices that
+  answer an authenticated request with an unauthenticated
+  `usmStatsNotInTimeWindows` Report. The untrusted tuple is used by one
+  authenticated corrected packet and is never installed as trusted state;
+  enabling this weakens spoof resistance, so strict UDP source checking is
+  recommended where possible.
+- `RawV3Message` and `RawMsgData` expose outer-envelope decoding separately
+  from secured scoped-PDU processing.
+
+### Changed
+
+- SNMPv3 timeout retransmissions reuse the PDU request-id and a response
+  correlating to any transmitted msgID of the current exchange is accepted.
+  Each transmission still uses a fresh msgID. Stable PDU request-id reuse
+  matches deployed net-snmp and SNMP4J behavior, while acceptance of older
+  attempt msgIDs follows SNMP4J's broader cache behavior. Reusing the PDU
+  request-id is a deliberate interoperability deviation from RFC 3414 Section
+  11.1. Protocol corrections use fresh message and request IDs and reset the
+  acceptance window.
+- SNMPv3 receive processing now derives the security level from the received
+  auth/privacy flags. HMAC verification and RFC 3414 timeliness processing
+  precede decryption, scoped-PDU parsing, and Message Processing Model
+  correlation. Privacy without authentication is rejected.
+- Ordinary SNMPv3 Responses now require a current exchange msgID and exact
+  matches for authoritative engine ID, security model, security name, security
+  level, context engine ID, context name, Response PDU type, and PDU request-id.
+  Reports must also correlate by msgID before they can trigger an action.
+- Discovery accepts only a correlated noAuthNoPriv
+  `usmStatsUnknownEngineIDs.0` Report with the standard shape. It adopts the
+  engine ID and message-size limit but discards the unauthenticated boots/time
+  tuple. Authenticated requests initially use boots/time zero and establish
+  trusted time only through HMAC-verified processing.
+- Engine identity, localized keys, trusted time, and shared-cache mappings are
+  now updated as one coherent generation. Trusted time is shared by
+  authoritative engine ID across target addresses and merges monotonically;
+  older in-window messages cannot lower the high-water value. Cache expiry no
+  longer silently replaces an identity already established by a live client.
+- **Breaking:** `EngineState` no longer exposes `engine_id`, `engine_boots`,
+  `engine_time`, `synced_at`, or `latest_received_engine_time` fields, and
+  `EngineState::resync()` was removed. Use `engine_id()`, `trusted_time()`, and
+  `estimated_boots_time()`; `TrustedEngineTime` exposes the authenticated boots,
+  received-time base, and high-water value. There is no backward-resync
+  replacement: call `Client::rediscover_engine()` when the remote identity has
+  intentionally changed.
+- SNMPv3 `usmStatsNotInTimeWindows` correction is independent of timeout retry
+  policy and transport reliability, so one authenticated correction remains
+  available with `Retry::none()`, TCP, custom reliable transports, or after the
+  final timeout attempt. A repeated correction Report is terminal.
+- **Breaking:** `Auth::Usm` now contains `UsmConfig` directly, and the duplicate
+  `UsmAuth`/`UsmBuilder` types were removed. USM credential fields are private
+  and use valid-state constructors; use `auth_priv(...)` instead of chaining a
+  privacy-only configurator. Replace public field access with `username()`,
+  `configured_context_name()`, `auth_protocol()`, and `priv_protocol()`.
+  Credential configurators use last-call-wins semantics, and owned plaintext
+  password buffers are zeroized when dropped.
+- **Breaking:** authoritative V3 roles now use `AuthoritativeEngine` instead of
+  independent engine-ID and boots setters. `install` and `restart` validate the
+  stored pair and complete the caller's persistence callback before returning;
+  `restart` increments boots first. Agents with USM users or V3 trap sinks and
+  notification receivers with USM users reject construction without this
+  state. V3 client trap sending requires it through
+  `local_authoritative_engine`; polling and Inform sending remain unchanged.
+  Clones share one authoritative clock, and runtime boots increments are
+  persisted before use.
+
+### Removed
+
+- The boolean Report helpers (`is_not_in_time_window_report()`,
+  `is_unknown_engine_id_report()`, and the other standard-USM predicates) were
+  replaced by `classify_report()` and `ReportStatus`.
+
+### Migration
+
+- Custom `Transport` implementations may override `register_request_alias()`
+  when they demultiplex responses before returning them to the client. The
+  default no-op remains suitable for connected or in-band transports.
+- Direct `ClientConfig` struct literals must initialize
+  `allow_unauthenticated_v3_time_correction` and
+  `local_authoritative_engine`, or use `..ClientConfig::default()`.
+- Replace `Auth::usm(user).auth(...).privacy(...)` with
+  `Auth::usm(user).auth_priv(...)`. Notification users and client credentials
+  now use the same `UsmConfig` type.
+- Replace agent/receiver engine-ID and boots setters with a persisted
+  `AuthoritativeEngine`, passed through `authoritative_engine()`. For V3 client
+  traps, use `local_authoritative_engine()`; polling and Inform clients do not
+  need local authoritative state.
+- Code inspecting a Report should match `Error::Report { status, .. }` or call
+  `classify_report()` instead of inspecting the first varbind or using the
+  removed boolean helpers.
+
+## [0.16.0] - 2026-07-14
+
+### Added
+
+- `Agent::send_trap_detailed()` and `Agent::send_inform_detailed()`, plus the `NotificationOutcome`/`SinkOutcome` types, which report per-sink delivery results (including confirmed-Inform timeouts) instead of discarding them. The existing `send_trap()`/`send_inform()` are unchanged and still return `Ok(())` after warn-and-discard; callers that need to observe delivery failures opt into the `_detailed` variants.
+
+### Changed
+
+- **Breaking:** `MibHandler::get` and `MibHandler::get_next` now return `HandlerResult<GetResult>` / `HandlerResult<GetNextResult>` (`Result<_, HandlerError>`) instead of the bare result enums. Returning `Err` makes the agent answer the whole request with a `genErr` Response whose error-index names the failing variable binding (RFC 3416 Section 4.2.1) — previously a handler had no way to report a processing failure (e.g. an unreachable backing store) and had to misreport it as `NoSuchObject`/`EndOfMibView`. `HandlerError` converts from any `std::error::Error` so `?` works inside handlers; the error message is logged by the agent and never sent on the wire. The `Ok` variants are unchanged. Migration for existing handlers is mechanical: change the two return types and wrap each returned value in `Ok(...)`.
+
+- SNMPv3 `msgMaxSize` now advertises the sender's own receive capacity per RFC 3412 Section 6.3, rather than reflecting the peer's value. The manager previously advertised the remote agent's cached capacity and the agent/receiver echoed the requester's value; each site now advertises its local receive capacity. Constraining outbound message size by the remote's advertised limit is tracked separately and not yet implemented.
+- SNMPv3 password-based key derivation now rejects passwords shorter than 8 octets with `CryptoError::PasswordTooShort` (RFC 3414 Section 11.2 / net-snmp `USM_PASSWORDTOOSHORT`) instead of warning and deriving an all-zero key. This is enforced at the single derivation entry point and in both crypto backends; pre-derived key constructors that take key material rather than a plaintext password (`from_bytes`, etc.) are unaffected. Configuring a USM user with a shorter password is now an error where it previously silently produced a weak key.
+- A v3 `InformRequest` is now accepted only when localized to the receiver's own engine ID (RFC 3414 Section 1.5.1: the receiver of a Confirmed-class PDU is authoritative). An Inform carrying a foreign authoritative engine ID is dropped with no acknowledgement; unconfirmed SNMPv2-Trap handling under a remote engine ID is unchanged.
+- Community messages now enforce version/PDU-type compatibility on decode and dispatch: `GetBulkRequest`, `InformRequest`, and `SNMPv2-Trap` are rejected in SNMPv1 messages, and the SNMPv1 `Trap` (tag 0xA4) is rejected in SNMPv2c/v3 messages (RFC 1157 / RFC 3416). `TrapV1` is routed only through the dedicated `TrapV1Pdu` path; the generic `Pdu` decoder rejects the `TrapV1` tag outright. Encode-side/construction-side hard enforcement (which would require a fallible `CommunityMessage::new`) is deferred; the legitimate v1<->v2 trap mapping is unchanged.
+- Agent and NotificationReceiver USM user builders now reject privacy-without-auth (privacy selected with no auth protocol) with `Error::Config`, matching the client builder and RFC 3412. They previously downgraded such a user to NoAuthNoPriv and dropped the privacy key.
+- Default authoritative engine IDs are now generated in a valid RFC 3411 format (enterprise number + format byte 5, followed by random octets) instead of `[80 00 00 00 01]` + an 8-byte `as_secs()` timestamp, which was malformed (claimed the 4-octet IPv4 format but carried 8 octets) and collided between instances started in the same second — producing identical localized keys under shared credentials. Configured engine IDs are validated (length 5..=32, not all-zero, not all-`0xff`) at both the agent and notification generation sites.
+- The agent now answers an SNMPv3 request whose scopedPDU `contextEngineID` is neither empty nor the local engine ID with an `snmpUnknownContexts` Report (RFC 3413 Section 3.2), instead of dispatching an arbitrary context against the local MIB and echoing it. Discovery-response engine IDs are validated against the same 5..=32 / all-zero / all-`0xff` bounds. Multi-context selection is not implemented; an empty or matching `contextEngineID` is still dispatched.
+- `AgentBuilder::build()` now rejects `max_concurrent_requests(Some(0))` (a zero-permit semaphore that would hang on the first packet) with `Error::Config`, and the concurrency-permit acquisition moved inside the cancellation-aware select so a pending acquire is preempted on shutdown.
+- `Client::new()` and `Client::with_engine_cache()` now clamp an invalid `max_oids_per_request` of 0 to the default instead of bypassing builder validation and later panicking in `slice::chunks(0)`.
+- A GET/GETNEXT response with fewer variable-bindings than the request is now rejected with `Error::MalformedResponse` (RFC 3416 Section 4.2.1) instead of being accepted with a warning, which caused positional misalignment between requested OIDs and returned values. Over-count responses were already rejected; walk/bulk paths are unaffected.
+- TCP transports now advertise `msgMaxSize` as their actual acceptance limit (`max_allocation_size`, clamped to the `i32` protocol ceiling) rather than a fixed `0x7FFFFFFF`, so a peer honoring the advertised size cannot send a v3 response that the reader then rejects.
+- `Oid::to_ber_checked()` now also enforces `validate_length()` and rejects zero-arc (empty) OIDs; it previously ran `validate()` alone and could emit over-length or empty OIDs.
+
+### Fixed
+
+- `parse_ber_length` did not cap long-form BER lengths, so a datagram declaring an oversized length (e.g. `02 88` followed by eight `0xFF` bytes) produced `id_len = usize::MAX` and panicked slicing the buffer during pre-authentication request-id extraction, permanently killing the receive task and all demultiplexing. Long-form lengths exceeding `MAX_LENGTH` or the remaining buffer are now rejected, matching `decode_length` (X.690 Section 8.1.3.5).
+- The SNMPv3 USM path expanded the password to a master key (RFC 3414 Section 2.6, a 1 MiB buffer hash) on every inbound packet before authentication was verified, letting an unauthenticated sender force repeated expensive derivations (CPU amplification). Master keys for plaintext-password users are now precomputed once at agent/receiver build time, so per-packet processing only localizes from the cached master key. A per-(engineID, username) localized-key object cache and a rate-limiter on repeated unauthenticated USM failures are deferred.
+- TCP `send()` stashed the stream lock guard for `recv()` to reclaim; a future dropped between the two await points (e.g. a `timeout()` around `client.get()`) leaked the guard and deadlocked every subsequent request. A single request/response now owns the stream lock as a local across the whole exchange, so a cancelled request releases the lock.
+- A TCP stream is now marked poisoned and shut down after any timed-out, truncated, oversized, or malformed frame read (and after write/flush failures), and subsequent operations fail fast with `Error::Closed`. Previously such a read returned without draining or closing the stream, and — because TCP is reliable and disables client retries — the next `recv()` parsed misaligned mid-frame bytes (RFC 3430 Section 2.1).
+- The TCP request receive timeout was stored in one `AtomicU64` shared across cloned transports, so a second client's `register_request` could overwrite the active request's timeout. It is now keyed per request-id.
+- The UDP timeout error reported a hardcoded `deadline - 1s` elapsed time (ignoring the configured timeout) with `retries: 0`, and could panic on an `Instant` underflow via `checked_sub(1s).unwrap()`. The final timeout error is now built at the client retry layer with the true elapsed time and retry count, and the underflowing subtraction is removed.
+- The production GETBULK decode path (community and v3) did not range-check `non-repeaters`/`max-repetitions`; compatible receive policy now normalizes negatives to 0 in `Pdu::decode` (net-snmp-compatible, matching the agent's own normalization, RFC 3416 Section 4.2.3), while strict receive policy rejects them. Canonical `PduBody::GetBulk` fields are unsigned, and outbound encoding rejects values above the `Integer32` maximum.
+- A bulk walk aborted with the error when an agent returned `tooBig`; it now halves `max-repetitions` (floor 1) and retries the same position, surfacing an error only if the request still does not fit at `max-repetitions = 1` (RFC 3416 Section 4.2.3).
+- The agent's `InformRequest` acknowledgement is now routed through the same size-budget/`tooBig` machinery as GET/GETBULK, returning a `tooBig` Response when the echoed Inform would exceed the size limit instead of silently dropping it and forcing the Confirmed-class sender to retry indefinitely (RFC 3416 Section 4.2.7). The standalone `NotificationReceiver` path, which has no size budget, is unchanged.
+- The walk scalar-fallback GET swallowed all errors via a catch-all, applied no result cap, and was performed only by `WalkStream::collect` (not the `Walk`/`BulkWalk` macro collect), so the same OID could yield different result sets. A shared helper now backs all three collect paths: it propagates non-absence errors (only genuine `noSuchObject`/`noSuchInstance`/`endOfMibView`/v1 `noSuchName` are swallowed) and applies `max_walk_results`, so `Some(0)` yields no fallback result.
+- The `Auth`/`UsmAuth`/`UsmBuilder` client config types derived `Debug` over plaintext community strings and passwords; they now render secret fields as `[REDACTED]`.
+- The agent's v1/v2c response size estimate used a fixed overhead that excluded the community string length, so a long operator-configured community could pass the fit check and then exceed the limit (silent drop instead of `tooBig`). The community length is now included in the overhead.
+- CI now checks the `--no-default-features` crypto feature combinations (`crypto-rustcrypto` and `crypto-fips`), guarding against the class of feature-gating compile break fixed in 0.15.0.
+- The VACM denied-OID skip loop during GETNEXT was unbounded, allowing a request over a large denied range to force O(range) backing-store lookups per step; it is now capped (1000 iterations), after which the varbind resolves to endOfMibView.
+- The agent notification id / v3 msgID counter was a function-local `static` shared across all `Agent` instances; each `Agent` now has its own per-instance sequence.
+- The UDP receive loop spun a CPU core and flooded logs on a persistent recv error (e.g. sustained `ENOBUFS`/ICMP); it now applies a capped exponential backoff on the error path only, reset on every successful receive.
+- A duplicate UDP datagram for a request-id whose response was still unconsumed overwrote the pending response and double-counted the delivered metric; the duplicate is now ignored.
+- SNMPv1 `tooBig` responses now echo the original request variable-bindings (RFC 1157 Sections 4.1.2-4.1.4); SNMPv2c/v3 continue to use empty variable-bindings.
+- `authenticate_message` returned `Ok(())` and left the message unsigned when the auth-parameter offset was out of bounds; it now returns an error, for symmetry with `verify_message` and defense-in-depth (the path is not reachable through validating callers).
+- A UDP pending slot is now unregistered immediately when the send fails after registration, instead of waiting for the deadline plus the periodic cleanup to reclaim it.
+- The `SaltCounter` wrap path returned a literal `1` when the counter reached `u64::MAX`, which could duplicate the value produced by the initialization thread; it now consumes the next distinct counter value (RFC 3826 Section 3.1.2.1). Reaching this requires 2^64 increments.
+- Documentation for the AES-192-CFB and AES-256-CFB privacy protocols now labels them as draft/vendor extensions (e.g. Cisco/Blumenthal-Lamm) rather than RFC 3826, which standardizes only AES-128. Wire behavior is unchanged.
+
+## [0.15.0] - 2026-07-14
+
+### Added
+
+- `UdpHandle::strict_source()`, opt-in strict source matching on a shared-transport handle. By default responses are matched by request ID alone and a source-address mismatch only logs a warning (multihomed agents may legitimately reply from a different address); with strict matching enabled, a response from any address other than the handle's target is dropped (counted as `unmatched`) and the request keeps waiting.
+- `TransportStats::unmatched` and `TransportStats::malformed` counters: datagrams whose request ID matched no pending request slot, and datagrams that failed message decode. Slots removed by the periodic cleanup pass are now counted under the existing `expired` counter.
+- `Error::Closed`, returned when the transport is shut down while a request is pending. Not retriable; recovery requires a new transport.
+
+### Changed
+
+- A request pending on a transport that shuts down now fails with `Error::Closed` instead of `Error::Timeout`, so client retry loops no longer burn full retry cycles with backoff against a dead transport. The slot-missing path still returns `Timeout` when the transport is open.
+
+### Fixed
+
+- The crate failed to compile without the `agent` feature (e.g. `--no-default-features --features crypto-rustcrypto`): the shared v3 inbound processing referenced `DecodeErrorKind::ExpectedEncryption`, which was gated behind `agent`. The variant is now unconditional.
+## [0.14.0] - 2026-07-14
+
+### Added
+
+- `EngineState::resync()`, which unconditionally set the engine boots/time notion from an authenticated source and allowed it to move backward, unlike the forward-only `update_time()`. The client used this as a compatibility recovery for an agent that reset its time without incrementing `snmpEngineBoots`; backward replacement is not an RFC 3414 Section 2.3 timeliness transition and is removed in the next release.
+- `Value::UInteger32` (application tag 0x47, RFC 1442's UInteger32) and `Value::Nsap` (application tag 0x45, NsapAddress) variants. Values with these tags previously decoded as `Value::Gauge32` and `Value::OctetString` respectively, which re-encoded under the wrong tag; decode-then-encode now round-trips the original wire tag. `Value` is `#[non_exhaustive]`, so this compiles against existing matches, but code matching `Value::Gauge32`/`Value::OctetString` (or comparing with `==`) no longer sees values carrying these tags — such data now arrives under the new variants. NSAP values always display as hex (matching net-snmp), and the CLI `type` field for them changed from `STRING`/`Hex-STRING` to `Nsap`.
+
+### Changed
+
+- `Oid::validate()` (and therefore `to_ber_checked()`/`validate_all()`) now rejects single-arc OIDs, which have no invertible BER encoding (X.690 8.19.4 packs the first two arcs into one subidentifier, so `[n]` encodes as a value that decodes to `[n, 0]`).
+
+### Fixed
+
+- Agent response size checks used a fixed 100-byte estimate for the non-varbind message overhead, which under-counts the v3 USM/scopedPDU wrapper; an authPriv Response that fit the estimate could exceed the client's msgMaxSize (and be sent anyway) or the agent limit (and be silently dropped) instead of being truncated or answered with `tooBig`. The GET, GETNEXT, GETBULK, and SET size checks now use a per-request upper-bound overhead that adds the engine ID (carried twice, in the security parameters and the scopedPDU), the user name, the context name, and the auth/priv material for v3; v1/v2c sizing is unchanged.
+- Agent silently dropped oversized GET, GETNEXT, and SET responses in the run loop instead of returning the alternate `tooBig` Response that RFC 3416 Sections 4.2.1, 4.2.2, and 4.2.5 require; the GET/GETNEXT/SET handlers now emit a `tooBig` Response (error-status `tooBig`, error-index 0, empty variable-bindings) when the Response would exceed `min(agentMax, msgMaxSize)`, and the run-loop drop is now the final fallback for when even that empty Response will not fit. The SET size check runs up front per Section 4.2.5, before the test/commit phases, so an oversized SET is no longer committed only to have its Response discarded (which a retrying manager would re-apply). GETBULK sizing (Section 4.2.3) is unchanged.
+- GETBULK truncation violated the RFC 3416 Section 4.2.3 positional layout: when a non-repeater varbind did not fit the size limit, the handler broke out of the non-repeater loop but fell through into the repeater loop, emitting repeater varbinds into the dropped non-repeater's slot and shifting every following position. Truncation removes bindings only from the end of the set, and all repeaters are positionally after every non-repeater, so a dropped non-repeater now returns the non-repeater prefix collected so far with no repeater bindings appended. GETBULK now returns a `tooBig` Response (error-status `tooBig`, error-index 0, empty variable-bindings per RFC 3416 Section 4.2) whenever no varbind fits the size limit, regardless of the non-repeaters count: both the non-repeater path (first non-repeater oversized) and the repeater path (`non_repeaters == 0` with the first repeater varbind oversized). The repeater path previously did `break 'outer` and returned a bare noError Response with empty varbinds, which a manager cannot distinguish from end-of-MIB, silently ending the walk instead of prompting a retry with a smaller max-repetitions (net-snmp returns tooBig here). Partial truncation once some varbinds already fit is unchanged.
+- VACM MIB-view matching (`View::contains` and `View::check_subtree`) resolved overlapping subtrees of equal length by insertion order, so `exclude` then `include` on the same specificity could grant access that `include` then `exclude` denied. Equal-length matches now follow RFC 3415: the lexicographically greatest matching subtree OID decides, making the outcome independent of the order subtrees were added.
+- VACM `View::check_subtree`'s child-detection branch compared subtree arcs against the query prefix literally, ignoring the subtree's family mask, while the primary match path was mask-aware: a masked subtree longer than the query with a wildcard arc inside the query prefix was missed as a child, so `check_subtree` returned `Included` where `Ambiguous` is correct, over-granting access on OIDs the masked family excludes. Both paths now share a mask-aware prefix comparison; `ViewSubtree::matches` behavior is unchanged.
+- OID BER arithmetic computed the combined first subidentifier (`arc1 * 40 + arc2`) in `u32`, which incorrectly rejected or wrapped valid root-2 OIDs near the RFC 2578 component boundary. The combined value and only its base-128 path now use `u64`, allowing `2.4294967295` to encode as 4294967375 while individual arcs and later subidentifiers remain `u32`.
+- `UsmSecurityParams::decode_from` accepted a `msgUserName` of any length; RFC 3414 Section 2.4 specifies `OCTET STRING (SIZE(0..32))`, and a username over 32 octets is now rejected on decode with `Error::MalformedResponse`. Encoding is unaffected.
+- `PrivKey::from_bytes` accepted a key of any length; a key shorter than `PrivProtocol::key_len()` (RFC 3414 Section 8.1.1.1's 16-octet DES secret, RFC 3826 Section 3.1.2's AES localized-key length) later panicked when the encryption/decryption routines sliced into it. `from_bytes` now returns `Err(CryptoError::InvalidKeyLength)` for an under-length key; a key at least `key_len()` long is still accepted, matching the ">=" length RFC 3826 specifies.
+- GETBULK's client-side encode path could put a negative `non-repeaters` or `max-repetitions` on the wire even though RFC 3416 Section 4.2.3 specifies both as `INTEGER (0..2147483647)`. Standard and GETBULK PDUs share one typed `Pdu` representation and policy-aware codec, while caller-facing construction uses checked `u32` values and rejects overflow. Receive-side compatibility can still normalize malformed negative wire values, and strict decode rejects them.
+- DISPLAY-HINT formatting aborted and hex-dumped the entire value when a format specification had an octet length of zero, though RFC 2579 Section 3.1 (2) permits a zero octet length. A zero-width spec now consumes no data and emits only its literal separator (once per repeat) and terminator, matching net-snmp; a trailing zero-width spec is not implicitly repeated, guarding against an infinite loop.
+- DISPLAY-HINT `t` (UTF-8) formatting used `String::from_utf8_lossy`, which substitutes U+FFFD for every invalid byte sequence; RFC 2579 Section 3.1 (3) mandates discarding trailing octets that do not form a valid UTF-8 character, not substituting them. Trailing invalid/incomplete sequences are now discarded; interior invalid sequences (followed by further valid content) still render as U+FFFD.
+- `Pdu::to_v1_trap()` stripped the `snmpTrapAddress.0` and `snmpTrapEnterprise.0` varbinds from the translated v1 trap after consuming them for the agent-addr and enterprise fields; RFC 3584 Section 3.2 rule (6) defines the SNMPv1 variable-bindings as the SNMPv2 bindings minus only the `sysUpTime.0`/`snmpTrapOID.0` prefix, so both varbinds are now retained in the translated trap's variable-bindings (while still populating agent-addr and enterprise as before).
+- `Pdu::to_v1_trap()` treated a trap OID of `snmpTraps.x` with `x = 0` or `x > 6` as a generic enterprise-specific trap with `enterprise` set to the full trap OID and `specific-trap` 0; such an OID is not one of the standard traps, so RFC 3584 Section 3.2 rules (1), (3), and (4) apply instead: `generic-trap` 6, `specific-trap` = the last sub-identifier, and `enterprise` = the trap OID minus its final sub-identifier. Translation of `snmpTraps.1` through `snmpTraps.6` is unchanged.
+- SET commit rollback set the failing binding's index as the error-index for both `commitFailed` and `undoFailed` Responses; RFC 3416 Section 4.2.5 specifies that native v2c/v3 `undoFailed` carries error-index zero (only `commitFailed` identifies the failed binding). An SNMPv1 downgrade to `genErr` retains the failed undo binding's index as required by RFC 2576.
+- Client accepted any PDU type as a response: a message echoing the request's own PDU type (or any other non-Response PDU) with a matching request-id was processed as a valid Response, though RFC 3416 Section 4.2 specifies only a Response-PDU may answer a request. Both the community (v1/v2c) and v3 receive paths now reject a non-Response PDU with `Error::MalformedResponse`. A v1/v2c response whose community does not echo the sent community is logged at warn but still accepted, matching net-snmp (proxies and some agents rewrite the community).
+- The v3 client ignored the RFC 3414 Section 3.2 step 7b timeliness check on responses: engine boots/time from a response only advanced the local notion, so a stale or replayed authenticated response was accepted. An authenticated response outside the time window is now rejected with `Error::Auth`, clearing the cached engine state and derived keys so the next call re-runs discovery. An authenticated notInTimeWindows Report used the compatibility `EngineState::resync()` path, including backward replacement, and propagated it to the shared `EngineCache`; this was not an RFC 3414 Section 2.3 timeliness transition and is removed in the next release. An unauthenticated Report remained forward-only so a spoofed Report could not drag the notion back.
+- `verify_message` bounds-checked `auth_offset + auth_len` only against the message length, so a `msgAuthenticationParameters` field longer than 48 octets (the SHA-512 MAC length, the largest any supported protocol produces) panicked slicing the internal zeros buffer — a remotely triggerable panic on malformed input. An `auth_len` above 48 now fails verification instead.
+- The agent's SNMP-MPD-MIB counters `snmpInvalidMsgs` and `snmpUnknownSecurityModels` (RFC 3412 Section 5.1) were declared but never incremented; the MIB scalars and the `Agent::snmp_invalid_msgs()`/`Agent::snmp_unknown_security_models()` accessors always read 0. Both are now counted by the shared v3 inbound processing, and classification follows `MsgGlobalData`'s field decode order so a message rejected at an earlier header field is not misattributed to `snmpUnknownSecurityModels`.
+- When `snmpEngineBoots` was latched at its maximum, the agent rejected authenticated requests with an unauthenticated Report emitted before HMAC verification; the rejection now occurs at the RFC 3414 Section 3.2 step 7a timeliness check after authentication, so the notInTimeWindows Report is itself authenticated and trustworthy to the receiver.
+- Agent engine-discovery Reports incremented `usmStatsUnknownEngineIDs` only when the request's reportableFlag was set; the counter now increments regardless of the flag, and the Report echoes the requester's `msgUserName`, matching the notification receiver's handling.
+
+## [0.13.0] - 2026-07-08
+
+### Added
+
+- `security_level` field on `Notification::TrapV3` and `Notification::InformV3`, plus a `Notification::security_level()` accessor returning `Option<SecurityLevel>` (`None` for v1/v2c); lets callers distinguish an authenticated notification from a `noAuthNoPriv` one claiming the same username, per RFC 3411 Section 3.4.3
+- Optional community filtering on the notification receiver via `NotificationReceiverBuilder::community()` and `NotificationReceiverBuilder::communities()`; opt-in (empty accepts any and surfaces the community to the caller), constant-time matching, and a filtered inform is dropped without acknowledgement
+- usmStats counter accessors on `NotificationReceiver`: `usm_unknown_usernames()`, `usm_wrong_digests()`, `usm_not_in_time_windows()`, `usm_unsupported_sec_levels()`, and `usm_decryption_errors()` (RFC 3414); v3 inform USM failures now increment the matching counter and, when the reportableFlag is set, return a Report PDU (authenticated at authNoPriv for notInTimeWindows) so senders can resynchronize
+- Per-engine timeliness tracking for authenticated v3 traps in the notification receiver, with the per-engine table bounded to a fixed capacity and least-recently-updated eviction
+- `in_authoritative_time_window()` exported from the `v3` module; shared RFC 3414 Section 2.2.3 / 3.2 Step 7a predicate (local boots not latched, boots match, time within 150s) now backing `EngineState::is_in_time_window()`, the agent, and the notification receiver
+
+### Changed
+
+- **Breaking:** `Notification::TrapV3` and `Notification::InformV3` gained a `security_level: SecurityLevel` field. The `Notification` enum is not `#[non_exhaustive]`, so code that constructs these variants or matches them exhaustively must account for the new field (add `security_level` or use `..`).
+- The internal backend encryption operation's `data` parameter changed from `&mut [u8]` to `&mut Vec<u8>`. Block ciphers (DES, 3DES) now pad unaligned plaintext to the next 8-byte boundary inside the selected backend (per RFC 3414 Section 8.1.1.2) rather than requiring the caller to pre-pad; the built-in `PrivKey` DES/3DES paths no longer pad before dispatch. Wire output for the RustCrypto and FIPS backends is unchanged.
+- A notification receiver configured without USM users now drops all v3 notifications at every security level, per RFC 3414 Section 3.2 Step 4; `bind()` and module docs updated to reflect this.
+- Additional trait derives: `Auth`, `UsmAuth`, `MasterKey`, and `MasterKeys` now derive `PartialEq`, `Eq`, `PartialOrd`, `Ord`, and `Hash`; `CommunityVersion`, `OidOrdering`, `AuthProtocol`, and `PrivProtocol` additionally derive `PartialOrd`, `Ord`, and `Hash`.
+- Bumped the RustCrypto dependencies for the `crypto-rustcrypto` backend to the `cipher` 0.5 / `digest` 0.11 generation: `aes` 0.9, `cbc` 0.2, `cfb-mode` 0.9, `des` 0.9, `digest` 0.11, `hmac` 0.13, `md-5` 0.11, `sha1` 0.11, `sha2` 0.11. Provider internals migrated to the new trait/module names; wire output is unchanged.
+
+### Fixed
+
+- Agent evaluated RFC 3414 Section 3.2 Step 5 (security-level support) after authentication (Step 6), timeliness (Step 7), and the boots-latched gate; a request for a user lacking the required auth key (authNoPriv/authPriv) or privacy key (authPriv) now counts `usmStatsUnsupportedSecLevels` regardless of its HMAC, engine boots, or time
+- Agent accepted V3 requests carrying a mismatched `msgAuthoritativeEngineBoots` when the message time was within the window; now rejected with a `notInTimeWindows` Report per RFC 3414 Section 3.2 Step 7a (boots must match, not just time)
+- Agent's `notInTimeWindows` Report is now authenticated at authNoPriv per RFC 3414 Section 3.2 Step 7a, so a client can authenticate the reported tuple instead of failing with an auth error; in this release the client applied it through the compatibility resync behavior described above
+- Authenticated v3 traps sent under the sender's own authoritative engine ID are now accepted by the notification receiver (previously rejected by an own-engine-ID gate)
+- Notification receiver now checks user existence before the security-level branch, so `noAuthNoPriv` messages from unknown users are counted (`usmStatsUnknownUserNames`) and dropped instead of delivered, per RFC 3414 Section 3.2 Step 4
+- Notification receiver now checks security-level support before digest verification, so an authPriv message for a user without a privacy key counts `usmStatsUnsupportedSecLevels` regardless of its HMAC, per RFC 3414 Section 3.2 (Step 5 before Step 6)
+- Latched engine-boots `notInTimeWindows` Report from the receiver is now authenticated at authNoPriv, per RFC 3414 Section 3.2 Step 7a
+- Notification receiver no longer counts or reports Step 7b timeliness failures for the non-authoritative case; `usmStatsNotInTimeWindows` and its Report are reserved for the authoritative case per RFC 3414
+- USM Report PDU `request-id` is now set to 0 per RFC 3412 Section 7.1 on the agent discovery, agent USM-failure, and notification-receiver report paths, since these reports are emitted before the request's scopedPDU is decoded; previously the message-level msgID was used
+- `UdpTransport` background recv task and socket no longer leak when the last transport reference is dropped without calling `shutdown()`; the previous `Drop`-based cancellation never fired because the recv task held a strong `Arc` to the transport state
+- `UdpTransport::shutdown()` now wakes pending request waiters immediately so they fail without waiting for their individual deadlines, instead of leaving them to time out
+
+## [0.12.0] - 2026-04-02
+
+### Added
+
+- Trap/inform sending for both Client (`send_trap`, `send_inform`, `send_v1_trap`) and Agent (`send_trap`, `send_inform`); agent supports multiple trap sinks via `AgentBuilder::trap_sink()`
+- Built-in MIB handlers for snmpEngine, usmStats, and mpdStats groups, auto-registered during agent construction; disable selectively with `AgentBuilder::without_builtin_handler()`
+- Auto-bisect for GET/GETNEXT batches on tooBig response; automatically splits and retries without caller intervention
+- Fallback GET on empty walk result to distinguish empty subtree from agent quirks
+- Leading-dot OID notation in `Oid::parse()` (e.g., `.1.3.6.1.2.1`)
+- Engine discovery support in notification receiver for V3 authenticated informs
+- Time window validation for V3 Informs in notification receiver
+- `AgentBuilder::engine_boots()` for persisting engine boots across restarts
+- `free_set` cleanup phase in MibHandler SET protocol, called in reverse order when a later test_set fails
+- Socket buffer size configuration on `UdpTransportBuilder`
+- `UdpTransport::stats()` returning `TransportStats` with delivered/expired request counters
+- Decode historic BER types: NSAP (tag 0x45) as OctetString, UInteger32 (tag 0x47) as Gauge32
+- Mutually exclusive compile-time crypto backend selection for SNMPv3 USM operations
+- `crypto-rustcrypto` feature (default) backed by RustCrypto crates, supporting all auth and privacy protocols
+- `crypto-fips` feature backed by aws-lc-rs for FIPS 140-3 compliance; rejects MD5, DES, and 3DES at runtime with `CryptoError::UnsupportedAlgorithm`
+- `CryptoError` enum and `CryptoResult` type alias exported from the crate root for fallible key and USM operations
+- Trait impls across public types: `TryFrom<i32>` for `Version`/`RowStatus`/`StorageType`, `TryFrom<u8>`/`Into<u8>` for `SecurityLevel`, `From<Vec<u32>>` for `Oid`, `Hash` for `PduType`/`GenericTrap`/`ErrorStatus`/`WalkAbortReason`, `PartialEq`/`Eq` for `UsmSecurityParams` and message types, `AsRef` for `Oid`/`MasterKey`/`LocalizedKey`, `IntoIterator` for `Oid`/`OidTable`, `Copy` for `Backoff`/`DecodeError`, `Debug` for `DerivedKeys`/`VarBindInfo`
+- `ClientBuilder`, `UsmBuilder`, `RetryBuilder`, `TcpTransportBuilder` now derive `Debug`; `RetryBuilder` also derives `Clone`
+- `Auth`, `ClientBuilder`, and `Retry` re-exported from the prelude
+- Examples for sync/lightweight runtime usage, notification sending, and agent with SET handlers
+
+### Changed
+
+- **Breaking:** `crypto-rustcrypto` is now an explicit default feature instead of unconditional RustCrypto dependencies. Callers using `default-features = false` must now enable `crypto-rustcrypto` explicitly. The features are mutually exclusive; `--all-features` will not compile. Add `features = ["crypto-rustcrypto"]` if you were using `default-features = false`.
+- **Breaking:** `MasterKey`, `MasterKeys`, `LocalizedKey`, and `UsmConfig` methods that perform crypto operations now return `CryptoResult` instead of infallible values. Affected: `MasterKey::from_password()`, `MasterKey::localize()`, `MasterKeys::new()`, `MasterKeys::with_privacy()`, `LocalizedKey::from_password()`, `LocalizedKey::from_master_key()`, `LocalizedKey::compute_hmac()`, `LocalizedKey::verify_hmac()`, `UsmConfig::derive_keys()`. Add `.unwrap()` or propagate with `?` at each call site.
+- **Breaking:** `Transport` trait no longer requires `Clone`. Remove `Clone` from trait bounds if you have generic code bounded on `Transport + Clone`.
+- **Breaking:** `Message::pdu()`, `Message::into_pdu()`, and `CommunityMessage::into_pdu()` now return `Option` instead of panicking; removed redundant `try_pdu()`/`try_into_pdu()`. Replace `.pdu()` with `.pdu().unwrap()` or handle the `None` case; replace `.try_pdu()` with `.pdu()`.
+- **Breaking:** `UdpTransport::shutdown()` is now async and awaits the background recv task for clean shutdown confirmation. Add `.await` at call sites.
+- **Breaking:** Built-in MIB handlers (snmpEngine, usmStats, mpdStats) are now auto-registered on every agent. If you had custom handlers for OIDs under `1.3.6.1.6.3.10.2.1`, `1.3.6.1.6.3.15.1.1`, or `1.3.6.1.6.3.11.2.1`, use `AgentBuilder::without_builtin_handler()` to disable the conflicting built-in.
+- UDP transport uses per-request notify instead of per-shard broadcast, reducing spurious wakeups and lock acquisitions
+- Internal BER methods renamed from `ber_encoded_len`/`ber_content_len` to `ber_encoded_size`/`ber_content_size` to match public `encoded_size` convention
+
+### Fixed
+
+- VACM View longest-match semantics per RFC 3415; previously selected first match instead of longest prefix
+- V3 msgMaxSize not respected in GETBULK response size limiting
+- Walk did not terminate on noSuchObject and noSuchInstance exception values
+- GETBULK requests from v1 clients were not rejected per RFC 3416
+- Counter64 values not filtered from v1 responses per RFC 2576
+- V2c+ SET error statuses not downgraded for v1 requests per RFC 2576
+- V3 security parameters not validated in client response matching
+- `SO_REUSEADDR` enabled on agent and notification listener sockets; now disabled
+- Authenticated messages accepted when engineBoots reached maximum per RFC 3414
+- engineBoots not incremented when engineTime reached MAX_ENGINE_TIME per RFC 3414
+- GETNEXT loop in agent could run forever with buggy handlers; `get_next_accessible_oid()` now checks OID monotonicity
+- Engine time truncation in agent; now uses saturating cast via `.min(u32::MAX as u64)`
+- `getrandom` failure in `random_nonzero_u64()` could panic; now returns `CryptoResult`
+- TCP timeout `std::sync::Mutex` could poison; replaced with `AtomicU64`
+- VACM misconfiguration was silent; `resolve_vacm()` now logs a warning when a group has no matching access entry
+- Response auth key could unwrap on None; `extract_auth_key()` now returns `&DerivedKeys` alongside the auth key
+- SET `undo_set` failure during rollback returned `CommitFailed` instead of `UndoFailed` per RFC 3416
+- `EngineCache` grew without bound; now unbounded by default (negligible per-entry cost) with `with_max_capacity()` for hard limits
+- UDP pending requests HashMap had no cleanup; recv loop now runs `cleanup_expired()` every second
+- `snmpSilentDrops` counter was defined but never incremented; agent run loop now checks encoded response size against max message size per RFC 3413
+- Unnecessary allocation in `verify_message`
+
+## [0.11.0] - 2026-03-28
+
+### Added
+
+- `GenericTrap` enum with `Unknown(i32)` variant for wire values outside the standard 0-6 range
+- `Display` impl for `GenericTrap`
+- `PartialEq`, `Eq` for `Pdu`
+- `ErrorStatus::as_str()` returning `Option<&'static str>`
+- USM stats counters (`usmStatsUnknownEngineIDs`, `usmStatsUnknownUserNames`, `usmStatsWrongDigests`, `usmStatsNotInTimeWindows`) on `AgentInner`; public accessors on `Agent`
+- `CommunityPdu` enum wrapping either a standard `Pdu` or `TrapV1Pdu` in community message decoding
+- Error kinds `IntegerTooLong`, `Unsigned32TooLong`, `Integer64MissingLeadingZero`
+- V3 outbound messages now use the negotiated `msgMaxSize` from engine discovery instead of a hardcoded value
+- Retry policy applied to V3 engine discovery; previously a single unreliable discovery probe caused all subsequent V3 operations to fail on packet loss
+- Discovery lock prevents redundant concurrent discovery attempts from multiple tasks racing on the same client
+
+### Changed
+
+- **Breaking:** `TrapV1Pdu.generic_trap` field type changed from `i32` to `GenericTrap`; `generic_trap_enum()` removed - use the field directly
+- **Breaking:** `Notification::trap_oid()` return type changed from `&Oid` to `Result<Oid>`; RFC 3584 OID conversion for TrapV1 enterprise-specific traps is fallible
+- **Breaking:** `MibHandler::undo_set` return type changed from `BoxFuture<'a, ()>` to `BoxFuture<'a, SetResult>`; the return value lets the agent framework detect and log failed rollbacks. Implementations that cannot undo should return `SetResult::CommitFailed`.
+- **Breaking:** `set_many` now returns `Error::Config` when the varbind count exceeds the per-request OID limit; SET must be atomic per RFC 3416 and silent batching across PDUs violates that guarantee
+- **Breaking:** `UsmUserConfig` type alias removed; use `UsmConfig` directly
+- **Breaking:** `EngineCache::Clone` removed; share instances via `Arc<EngineCache>`. Cloning produced a snapshot rather than a shared reference, so callers using clone for sharing would silently split the cache.
+- **Breaking:** `--level` flag removed from V3 CLI tools; security level is inferred from auth/priv configuration
+- `error_index` in response PDUs is no longer bounds-checked at parse time; negative values and values exceeding the varbind count are now accepted, matching net-snmp behavior
+- INTEGER values 5-8 bytes are now accepted and sign-extended to i32, matching net-snmp `CHECK_OVERFLOW_S`; values longer than 8 bytes are rejected
+- Unsigned32 values up to 9 bytes (with leading zero) are now truncated to u32, matching net-snmp `CHECK_OVERFLOW_U`
+- `Counter64` zero-length encoding now accepted with a warning instead of an error
+- Long-form BER length limited to 8 octets (was 4), matching net-snmp's `sizeof(long)` threshold on 64-bit
+- `PrivKey` clones now start with an independent salt counter instead of sharing the same atomic
+
+### Fixed
+
+- Salt counter race in `PrivKey::encrypt` could produce duplicate IVs under concurrent use; counter now uses `compare_exchange` and skips zero atomically
+- Bounds checks on USM auth parameter offset were missing; malformed messages could panic
+- Lock poison in V3 client and TCP transport caused panics; both now return `Error::Config`
+- TCP `active_guard` held a sync `Mutex` guard across `.await` points; replaced with `tokio::sync::Mutex`
+- SNMPv1 Trap PDUs (tag `0xA4`) were rejected instead of decoded through the community message path
+- V3 concurrent discovery race where multiple callers could all run discovery simultaneously; callers now wait on a lock and reuse the result
+- Unknown USM users for non-discovery `noAuthNoPriv` messages were not rejected per RFC 3414 Section 3.2; they now are
+- GETNEXT did not advance past VACM-denied OIDs per RFC 3413 read-class semantics
+- GETBULK did not apply VACM access checks; GETBULK also stopped at the first denied OID instead of continuing
+- `handles()` default impl matched OIDs below the registered prefix, causing incorrect GET/SET routing; now only matches OIDs within the subtree
+- SNMPv3 context names not forwarded from client config to scoped PDU
+- `Pdu::is_error` incorrectly matched non-response PDUs (e.g. GETBULK requests)
+- SNMPv1 `noSuchName` was not treated as normal walk termination
+- Multi-byte BER tags were incorrectly accepted; now rejected (only single-byte tags are valid for SNMP)
+- DES padding calculation was incorrect; simplified to `next_multiple_of(8)` matching the 3DES path
+- OctetString/Opaque BER length clamped to enclosing SEQUENCE boundary for devices that send inflated lengths (e.g. MikroTik)
+- IPv6 targets were not bracketed in display output
+- `UdpTransport` background receiver task was not cancelled when the last clone was dropped
+- Request ID counter seeded with time+PID; now uses `getrandom`
+- `Retry::default()` used zero delay; now 1s fixed delay
+- `GenericTrap::Unknown` displayed as `enterpriseSpecific`; now displays as `unknown`
+- `TimeTicks` verbose display used inconsistent format
+- Display hint `"1b"` (RFC 2579 OCTET STRING format) was not a valid format character; removed
+- Display hint `"t"` (UTF-8) format incorrectly cast each byte to `char` instead of decoding UTF-8; invalid sequences are now replaced with U+FFFD per RFC 2579
+- Inflated varbind count responses (more varbinds than requested) now return `MalformedResponse`; truncated responses warn and return partial results
+
+### Removed
+
+- `TrapV1Pdu::generic_trap_enum()` - use the `generic_trap` field directly
+- `UsmUserConfig` type alias
+- `EngineCache::Clone`
+
+## [0.10.0] - 2026-03-27
+
+### Added
+
+- `Target` enum for specifying client target addresses. `ClientBuilder::new()` and `Client::builder()` now accept `(host, port)` tuples and `SocketAddr` in addition to combined address strings. This avoids IPv6 bracket formatting when host and port are stored separately - requested by @sjthomason (#17)
+- `Target` implements `Display`
+- `From<SocketAddr>` for `Target`, for use when the address is already resolved
+
+### Changed
+
+- **Breaking:** `ClientBuilder::new()` and `Client::builder()` now accept `impl Into<Target>` instead of `impl Into<String>`. `Target` converts from `&str`, `String`, `(&str, u16)`, `(String, u16)`, and `SocketAddr`. All existing `&str` and `String` callers work unchanged, but code relying on other `Into<String>` types may need adjustment
+
+## [0.9.0] - 2026-03-27
+
+### Added
+
+- `UdpTransport` now implements `Clone` (cheap `Arc` increment) - thanks @sjthomason (#16)
+
+### Changed
+
+- **Breaking:** `ClientBuilder::build_with()` is now `async` and must be `.await`ed
+- **Breaking:** `ClientBuilder::resolve_target()` uses async DNS resolution (`tokio::net::lookup_host`) instead of blocking `std::net::ToSocketAddrs`, preventing worker threads from stalling on slow or failing DNS - reported by @sjthomason (#17)
+- DNS resolution is bounded by the builder's configured timeout
+- Target address now defaults to port 161 when no port is specified, matching standard SNMP behavior. Accepts bare IPv4 (`192.168.1.1`), bare IPv6 (`::1`, `fe80::1`), bracketed IPv6 (`[::1]:162`), and hostnames (`switch.local`)
+- CLI tools pass the raw target string to the builder instead of pre-resolving, removing redundant DNS resolution
+
+### Fixed
+
+- Bare IPv6 addresses (e.g., `fe80::1`) were incorrectly parsed as having a port due to colon detection
+
+## [0.8.0] - 2026-03-21
+
+### Added
+
+- `mib` feature flag for optional mib-rs integration
+- `mib_support` module with OID name resolution, symbolic formatting, type-aware value rendering (enum labels, display hints), and structured varbind metadata
+- `VarBindFormatter` trait for pluggable output formatting in CLI tools
+- OID conversions between async-snmp and mib-rs types
+- Re-export core mib-rs types from `mib_support` so users don't need a direct mib-rs dependency
+- MIB CLI args (`--mib-dir`, `--load-mibs`, `--system-mibs`) for asnmp-get, asnmp-walk, asnmp-set
+- Examples: `mib_get`, `mib_walk`, `mib_table`
+
+## [0.7.0] - 2026-03-19
+
+### Added
+
+- `agent` feature flag to gate SNMP agent module and `quinn-udp` dependency (default-on)
+- `rt-multi-thread` feature flag for opt-in multi-threaded tokio runtime
+
+### Changed
+
+- Default tokio runtime is now single-threaded (`current_thread`); enable `rt-multi-thread` for multi-threaded runtime
+- `SecurityModel` enum moved from `agent::vacm` to `handler` module (re-exported from `agent::vacm` for compatibility)
+- Bumped `quinn-udp` from 0.5 to 0.6
+
+## [0.6.0] - 2026-03-13
+
+### Fixed
+
+- `Client::connect` binding to IPv6 socket for IPv4 targets on macOS
+- Cross-platform socket binding: default `UdpTransportBuilder` bind address changed from `[::]:0` to `0.0.0.0:0` to avoid assuming Linux dual-stack behavior
+
+### Changed
+
+- `UdpTransport::handle()` auto-maps IPv4 targets to IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) when the socket is IPv6, enabling dual-stack shared transports without caller-managed address families
+- Added macOS and Windows to CI test matrix
+
+## [0.5.0] - 2026-01-18
+
+### Added
+
+- INTEGER DISPLAY-HINT formatting with `format::hints` constants module
+- OID suffix extraction methods (`suffix_from`, `try_suffix_from`) for table index handling
+- `RowStatus` and `StorageType` enum exports for USM table handling
+- Value type improvements for NMS use cases
+- `value_extraction` example
+
+### Changed
+
+- Use `VecDeque` in `BulkWalk` to avoid cloning varbinds on yield
+
+### Removed
+
+- `V3SecurityConfig` type alias (use `UsmConfig` directly)
+- `context_engine_id` field from `ClientBuilder`
+- Standalone `serde` feature flag
+- `ClientBuilder::build()` method (use `Client::new()` or `build_with()`)
+
+### Documentation
+
+- Document VACM permissive mode default in `AgentBuilder`
+- Clarify when to use `Client::new()` vs builder pattern
+- Improved examples and README
+
+## [0.4.0] - 2026-01-04
+
+### Added
+
+- `TcpTransportBuilder` with configurable allocation limit for DoS protection
+- Automatic key extension for AES-192/256 and 3DES privacy protocols
+
+### Changed
+
+- **Breaking:** Redesigned error types around caller actions and boxed `Error` for smaller `Result`s
+- **Breaking:** `TrapV1Pdu::v2_trap_oid()` now returns `Result` to handle invalid trap values
+- Use explicit tracing targets with brace syntax for stable log filtering
+- Reduced BER `MAX_LENGTH` from 16MB to 2MB
+- Use `getrandom` for salt initialization and skip zero on wraparound
+- Compute `VarBind::encoded_size()` arithmetically instead of allocating
+
+### Fixed
+
+- `Pdu::decode` rejecting valid GETBULK requests
+- OID first subidentifier overflow during BER encoding
+- Enforce `MAX_OID_LEN` during BER decode per RFC 2578 Section 3.5
+- PDU `error_index` and GETBULK parameter validation during decode
+- Integer overflow in BER decoder bounds checks
+- USM `engine_boots`/`engine_time` validation per RFC 3414
+- Cap `estimated_time()` at `MAX_ENGINE_TIME` per RFC 3414 Section 2.2.1
+- Broken doc links
+
+## [0.3.0] - 2026-01-02
+
+### Added
+
+- Agent concurrent request processing with semaphore-based limiting and graceful shutdown via `CancellationToken`
+- `View::check_subtree()` for 3-state access detection (included/excluded/ambiguous)
+- Blumenthal key extension (`KeyExtension::Blumenthal`) for AES-192/256 interoperability with net-snmp
+- `Transport::max_message_size()` for transport-aware msgMaxSize capping
+- IP_PKTINFO support via `quinn-udp` for correct source IP on multi-homed agents
+
+### Changed
+
+- VACM access selection implements full RFC 3415 preference order (securityModel, contextMatch, contextPrefix length, securityLevel)
+- SNMPv3 generates fresh msgID on each retry attempt per RFC 3412 Section 6.2
+- Request IDs masked to 31 bits for RFC 1157/3412 compliance
+- Agent-reported msgMaxSize capped to transport limit
+
+### Fixed
+
+- msgID and msgMaxSize bounds validation per RFC 3412 HeaderData definition
+
+### Removed
+
+- Unused dependencies and dead code
+
+## [0.2.0] - 2026-01-01
+
+### Changed
+
+- **Breaking:** Unified `UdpTransport` and `SharedUdpTransport` into a single
+  `UdpTransport` with `UdpHandle` pattern. The new design uses a background
+  receiver task with sharded pending maps for correct concurrent request handling.
+- **Breaking:** `Transport` trait changes:
+  - Renamed `target()` to `peer_addr()` for consistency with std
+  - Added `register_request(request_id, timeout)` for pre-send slot registration
+  - `recv()` no longer takes a timeout parameter (uses registered deadline)
+- Request IDs are now allocated from a global counter for process-wide uniqueness,
+  preventing collisions when multiple transports exist
+
+### Added
+
+- Configurable retry strategies with backoff support:
+  - `RetryStrategy::Fixed` - constant delay between retries (default)
+  - `RetryStrategy::Exponential` - exponential backoff with configurable base and max
+  - `RetryStrategy::None` - disable retries entirely
+- `UdpTransport::shutdown()` for graceful termination of background receiver
+- `ClientBuilder::build_with(&UdpTransport)` for convenient shared transport usage
+
+### Fixed
+
+- Concurrent UDP requests no longer cause false timeouts due to race conditions
+  in response routing
+- Memory leak from orphaned pending responses now prevented via periodic cleanup
+
+### Removed
+
+- `SharedUdpTransport` and `SharedUdpHandle` (functionality merged into `UdpTransport`)
+
+## [0.1.2] - 2026-01-01
+
+### Fixed
+
+- `MasterKeys` can now be used without also specifying passwords. Previously,
+  using `Auth::usm().with_master_keys()` would fail validation requiring
+  `auth_password` even though keys were already derived.
+
+### Documentation
+
+- Significantly expanded rustdoc coverage across all modules with examples
+- Added crate-level documentation sections for error handling, tracing,
+  agent compatibility, and scalable SNMPv3 polling
+- Improved examples to use test container credentials and RFC 5737 TEST-NET
+  addresses
+
+## [0.1.1] - 2025-12-31
+
+### Added
+
+- SNMPv1, v2c, and v3 client support
+- GET, GETNEXT, GETBULK, SET operations
+- WALK and BULKWALK streaming iterators
+- SNMPv3 USM security:
+  - Authentication: MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512
+  - Privacy: DES, AES-128, AES-192, AES-256
+- Transport implementations:
+  - `UdpTransport` for single-target clients
+  - `TcpTransport` for stream-based connections
+  - `SharedUdpTransport` for scalable polling (many targets, single FD)
+- `NotificationReceiver` for trap/inform handling
+- `Agent` with `MibHandler` trait for building SNMP agents
+- VACM (View-Based Access Control Model) support
+- Two-phase SET commit per RFC 3416
+- `oid!` macro for convenient OID construction
+- Zero-copy BER encoding/decoding
+- CLI utilities: `asnmp-get`, `asnmp-walk`, `asnmp-set`
+
+[Unreleased]: https://github.com/lukeod/async-snmp/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/lukeod/async-snmp/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/lukeod/async-snmp/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/lukeod/async-snmp/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/lukeod/async-snmp/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/lukeod/async-snmp/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/lukeod/async-snmp/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/lukeod/async-snmp/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/lukeod/async-snmp/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/lukeod/async-snmp/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/lukeod/async-snmp/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/lukeod/async-snmp/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/lukeod/async-snmp/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/lukeod/async-snmp/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/lukeod/async-snmp/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/lukeod/async-snmp/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/lukeod/async-snmp/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/lukeod/async-snmp/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/lukeod/async-snmp/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/lukeod/async-snmp/releases/tag/v0.1.1

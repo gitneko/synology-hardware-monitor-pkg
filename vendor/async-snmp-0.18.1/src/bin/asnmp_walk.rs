@@ -1,0 +1,193 @@
+//! asnmp-walk: Walk SNMP subtrees.
+//!
+//! Part of the async-snmp CLI utilities.
+
+use async_snmp::cli::args::{CommonArgs, OutputArgs, V3Args, WalkArgs};
+#[cfg(feature = "mib")]
+use async_snmp::cli::output::VarBindFormatter;
+use async_snmp::cli::output::{
+    OperationType, OutputContext, RequestInfo, build_security_info, write_error,
+    write_verbose_request, write_verbose_response,
+};
+use async_snmp::{Auth, Client, Oid, VarBind, Version, WalkMethod, WalkOptions};
+use clap::Parser;
+use std::process::ExitCode;
+use std::time::Instant;
+
+/// Walk an SNMP subtree using GETNEXT or GETBULK.
+#[derive(Debug, Parser)]
+#[command(name = "asnmp-walk", version, about)]
+struct Args {
+    #[command(flatten)]
+    common: CommonArgs,
+
+    #[command(flatten)]
+    v3: V3Args,
+
+    #[command(flatten)]
+    output: OutputArgs,
+
+    #[command(flatten)]
+    walk: WalkArgs,
+
+    #[cfg(feature = "mib")]
+    #[command(flatten)]
+    mib: async_snmp::cli::mib_cli::MibArgs,
+
+    /// OID subtree to walk (dotted notation or well-known name).
+    #[arg(value_name = "OID")]
+    oid: String,
+}
+
+#[cfg_attr(feature = "rt-multi-thread", tokio::main)]
+#[cfg_attr(
+    not(feature = "rt-multi-thread"),
+    tokio::main(flavor = "current_thread")
+)]
+async fn main() -> ExitCode {
+    let args = Args::parse();
+
+    // Initialize tracing
+    args.output.init_tracing();
+
+    // Validate V3 arguments
+    if let Err(e) = args.v3.validate() {
+        eprintln!("Error: {}", e);
+        return ExitCode::FAILURE;
+    }
+    let auth = match args.v3.auth(&args.common) {
+        Ok(auth) => auth,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let version = auth.version();
+
+    let target = &args.common.target;
+
+    // Load MIBs if requested
+    #[cfg(feature = "mib")]
+    let mib = match args.mib.load().await {
+        Ok(mib) => mib,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Parse OID (use MIB resolution when available)
+    #[cfg(feature = "mib")]
+    let oid_result = async_snmp::cli::mib_cli::resolve_oid_arg(mib.as_ref(), &args.oid);
+    #[cfg(not(feature = "mib"))]
+    let oid_result = async_snmp::cli::hints::parse_oid(&args.oid);
+    let oid = match oid_result {
+        Ok(oid) => oid,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // V1 doesn't support GETBULK, force GETNEXT
+    let use_getnext = args.walk.getnext || matches!(version, Version::V1);
+
+    // Verbose output: show request info before executing
+    if args.output.verbose {
+        let operation = if use_getnext {
+            OperationType::Walk
+        } else {
+            OperationType::BulkWalk {
+                max_repetitions: args.walk.max_repetitions,
+            }
+        };
+
+        let request_info = RequestInfo {
+            target: target.as_str(),
+            version,
+            security: build_security_info(&auth),
+            operation,
+            oids: vec![oid.clone()],
+        };
+        write_verbose_request(&request_info);
+    }
+
+    // Build and run the walk
+    let start = Instant::now();
+    let result = run_walk(target.as_str(), &args, auth, oid, use_getnext).await;
+    let elapsed = start.elapsed();
+
+    match result {
+        Ok(varbinds) => {
+            // Verbose output: show response summary with varbind details
+            if args.output.verbose {
+                write_verbose_response(&varbinds, elapsed, !args.output.no_hints, args.output.hex);
+            }
+
+            let output_ctx = OutputContext::from_args(&args.output);
+            #[cfg(feature = "mib")]
+            let output_ctx = {
+                let mut output_ctx = output_ctx;
+                if let Some(m) = &mib {
+                    output_ctx.formatter = Some(m as &dyn VarBindFormatter);
+                }
+                output_ctx
+            };
+
+            if let Err(e) = output_ctx.write_results(
+                target.as_str(),
+                version,
+                &varbinds,
+                args.output.elapsed(elapsed),
+                None,
+            ) {
+                eprintln!("Error writing output: {}", e);
+                return ExitCode::FAILURE;
+            }
+
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            write_error(&e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run_walk(
+    target: &str,
+    args: &Args,
+    auth: Auth,
+    oid: Oid,
+    use_getnext: bool,
+) -> async_snmp::Result<Vec<VarBind>> {
+    // Set walk mode based on CLI flags
+    let method = if use_getnext {
+        WalkMethod::GetNext
+    } else {
+        WalkMethod::GetBulk
+    };
+
+    let timeout = args
+        .common
+        .timeout_duration()
+        .map_err(|error| async_snmp::Error::Config(error.into()))?;
+    let retry = args
+        .common
+        .retry_config()
+        .map_err(|error| async_snmp::Error::Config(error.to_string().into()))?;
+
+    let client = Client::builder(target, auth)
+        .request_timeout(timeout)
+        .retry(retry)
+        .walk_options(WalkOptions {
+            method,
+            max_repetitions: args.walk.max_repetitions,
+            ..WalkOptions::default()
+        })
+        .connect()
+        .await?;
+
+    // Use unified walk() which respects the walk_mode setting
+    client.walk(oid)?.collect().await
+}

@@ -1,5 +1,92 @@
 # Validation and evidence boundaries
 
+Current package **0.9.0-0056**: see [0054 UPS results](SNMP-UPS-RESULTS.md), [0052 generic/network results](SNMP-GENERIC-NETWORK-RESULTS.md), [P6 SNMP package validation](SNMP-P6-RESULTS.md) and [release notes](RELEASE-NOTES-0.9.0.md). Source/native/static/package checks are local. The user subsequently confirmed installation of build 0.9.0-0051 and the DSM polling profile on 21 October 2026; the broader P7 NAS/controller matrix remains open. Historical results below retain their original versions and evidence limits.
+
+## Build 0056 HPE iLO population and units (23 October 2026)
+
+The user supplied a DL20 Gen11 / iLO 6 1.79 diagnosis and full SNMPv2c/v3 walks.
+Both contain 2,041 HPE OIDs with identical OID sets. The relevant sanitized
+69-row subset retains health, population, measurements, ASN.1 types and full
+indices while replacing descriptive inventory and identifiers; original walks,
+addresses and event logs are not shipped. This verifies the supplied capture,
+not a new connection to the BMC. See the [HPE guide](SNMP-HPE.md).
+
+The capture confirms one present and one absent PSU, three unpopulated DIMM
+slots, three healthy fans with values 7/7/41, poweredOff(2) and unknown storage
+without CPQIDA controller/drive rows. Source review independently confirmed that
+the earlier profile omitted PSU Present. HPE's original MIB kit and official
+fan-speed advisory confirm the OID-specific enums, binary KiB module sizes and
+firmware boundaries. Empty storage remains unknown; power-off is context, not a
+proof of why inventory is missing. No live server or NAS settings were changed.
+
+Regression checks cover sanitized capture normalization, firmware boundaries
+and ambiguous units, conflicting/malformed presence, DIMM-specific status,
+and independent Net-SNMP v1/v2c/v3 replay through the actual CLI/store/alarm path.
+Removal history survives separate processes; unknown presence cannot recover,
+explicit reinsertion can recover, and absent hardware cannot clear an earlier
+component fault. Local checks passed 188 Rust unit and 9 integration tests, 61 frontend tests,
+23 Python tests, formatting and Clippy with warnings denied. Native DSM and live iLO acceptance of 0056 remain open.
+
+## Build 0055 direct-upgrade startup correction (23 October 2026)
+
+User-reported build-0054 behavior:
+
+| NAS | Reported DSM version | Observation |
+|---|---|---|
+| RS2421RP+ | 7.4.1 | 0054 works without repair; earlier SNMP development builds had been installed, so this does not establish a clean direct upgrade. |
+| RS2416RP+ | 7.3.2 | 0054 works after package repair. |
+| DS220+ | 7.4.1 | 0054 fails even after repair; build 0038 works. User reports `daemon startup timeout`; the full original log is unavailable. |
+
+Source inspection found a fixed five-second start budget covering all initial
+state loading, durable schema-1 backup and migration. A controlled local test
+used the exact delivered 0054 executable, actual state created by archived
+0.8.0-0018 and a six-second exclusive SQLite lock. Startup failed after 5.06 s,
+with schema 1 unchanged. Without contention, the direct upgrade succeeded.
+This reproduces a specific failure mechanism matching the reported timeout;
+it does not establish whether the NAS delay was caused by locks, storage latency,
+backup size or another startup operation. No missing directory, ownership or
+pre-existing-SNMP prerequisite was demonstrated. No real NAS was changed.
+
+Build 0055 initializes private state explicitly in `postinst` before service
+start/repair, allows 120 s for readiness and 30 s for database initialization
+contention, reports stopped/unknown DSM status as 3/4 and improves private startup
+diagnostics. The listener and shutdown handler precede PID publication; readiness
+requires a connectable API socket. Only complete, synced migration backups are
+published under `pre-snmp-schema1-*`; a failed temporary backup is cleaned up
+without touching previous complete backups.
+
+The same six-second delay succeeded locally with the corrected executable
+(about 6.4 s). The five-case actual-product upgrade suite passed using both an
+independent legacy schema-1 fixture and state created by the archived real
+0.8.0-0018 executable. It covers fresh installation, direct upgrade, repeated
+post-install/repair, delayed first start, transactional migration failure/retry,
+DSM status codes, unchanged key/device/credential/snapshot/event/queue/settings/
+acknowledgement data, a valid schema-1 rollback copy and a disabled trap listener.
+The archived binary is 0018, not the user's unavailable 0038 artifact; later
+legacy acknowledgement fields are seeded explicitly. These are private synthetic
+fixtures with device polling and delivery disabled.
+
+Local validation passed 183 Rust unit and 9 integration tests, 59 frontend tests,
+23 Python tests, formatting and Clippy with warnings denied. A new unit test
+checks failed backup cleanup, matching key/database copies, private permissions,
+preservation of previous backups and retry. The package pipeline runs
+`tools/upgrade_integration.py` against the static executable; SPK inspection also
+executes the extracted post-install hook twice and checks readiness/lifecycle.
+Its manifest records upgrade-suite results and the tested binary hash.
+
+Native 0055 direct-upgrade/repair acceptance on DS220+/RS2416RP+ remains open.
+The broader P7 hardware and documentation work remains separate.
+
+## Build 0051 DSM installation and polling profile (21 October 2026)
+
+The user confirmed “Build installiert. DSM Profil ist bestätigt.” This records
+successful installation and DSM polling-profile operation. The target model,
+DSM version, selected SNMP version/security and individual fault/recovery checks
+were not supplied; no broader acceptance is inferred. See the
+[DSM profile acceptance record](SNMP-SYNOLOGY-RESULTS.md#user-confirmed-dsm-acceptance-21-october-2026).
+
+## Historical validation
+
 Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 frontend tests. Build 0018 changes packaging/CI/documentation and adds seven isolated release-publication tests. Current package hashes and source identity are recorded in `dist/current/latest-assets/build-manifest.json` and `SHA256SUMS`; test output is retained in Actions logs. Source archives intentionally exclude `dist` and private runtime state.
 
 ## Current confirmed platform and systems (19 October 2026)

@@ -7,7 +7,10 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn hardware(key: &str) -> bool {
-    key != "collector" && !key.starts_with("coverage:") && !key.starts_with("log:")
+    key != "collector"
+        && !key.starts_with("coverage:")
+        && !key.starts_with("log:")
+        && !key.starts_with("trap:")
 }
 pub(crate) fn fault(health: Health) -> bool {
     matches!(health, Health::Warning | Health::Critical)
@@ -64,7 +67,7 @@ impl Evaluation {
         if snapshot
             .capabilities
             .iter()
-            .any(|c| c.outcome != "available")
+            .any(Capability::blocks_assessment)
         {
             return "unknown";
         }
@@ -512,6 +515,13 @@ impl Store {
                 params![id, key],
             )?;
         }
+        // End only the current trap-derived evidence for this incident. Keeping
+        // it active would reapply an old provisional fault on an unknown poll.
+        // Receipt/event history is retained; reset is not a recovery signal.
+        tx.execute(
+            "DELETE FROM observation_evidence WHERE device=?1 AND key=?2",
+            params![id, key],
+        )?;
         // alarm_control is removed by its existing ON DELETE CASCADE.
         tx.execute(
             "DELETE FROM alarm_state WHERE device=?1 AND key=?2",
@@ -1353,6 +1363,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut s = Store::open(dir.path()).unwrap();
         let d = Device {
+            primary_protocol: Default::default(),
+            snmp_poll: None,
+            snmp_traps: None,
             id: "ack-test".into(),
             name: "Test".into(),
             endpoint: "https://bmc.example/".into(),
@@ -1684,6 +1697,7 @@ mod tests {
         s.apply(&d, &snap, now).unwrap();
         ack(&mut s, &d, "fan", true, now);
         snap.logs.push(HardwareLog {
+            identity: None,
             fingerprint: "new-log".into(),
             message: "New fan log".into(),
             severity: Health::Warning,

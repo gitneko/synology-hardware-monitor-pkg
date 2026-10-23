@@ -1,0 +1,45 @@
+--- a/src/transport/mod.rs
++++ b/src/transport/mod.rs
+@@ -493,6 +493,14 @@
+ /// }
+ /// ```
+ pub trait Transport: Send + Sync {
++    /// Application budget hook after a PDU is decoded, before consuming its
++    /// values or protocol error. Includes discovery/Report/error responses.
++    /// Default transports retain their existing behavior. No packet contents
++    /// need to leave the protocol boundary for counting.
++    fn observe_decoded_pdu(&self, _pdu: &crate::pdu::Pdu) -> Result<()> {
++        Ok(())
++    }
++
+     /// Send request data to the target.
+     ///
+     /// Implementations that return a finite [`send_capacity`](Self::send_capacity)
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -878,6 +878,7 @@
+                     let Some(response_pdu) = response.into_pdu() else {
+                         return Ok(Candidate::Reject);
+                     };
++                    self.inner.transport.observe_decoded_pdu(&response_pdu)?;
+                     if response_pdu.pdu_type() != PduType::Response
+                         || response_pdu.request_id != request_id
+                     {
+--- a/src/client/v3.rs
++++ b/src/client/v3.rs
+@@ -631,6 +631,7 @@
+         )?;
+         let decode_anomalies = combine_staged_v3_anomalies(decode_anomalies, scoped.anomalies);
+         let scoped_pdu = scoped.value;
++        self.inner.transport.observe_decoded_pdu(&scoped_pdu.pdu)?;
+ 
+         // Bind the Internal-class Report to a transmitted discovery msgID only
+         // after Security Model processing and scoped-PDU parsing.
+@@ -1043,6 +1044,7 @@
+         };
+         decode_anomalies = combine_staged_v3_anomalies(decode_anomalies, scoped_outcome.anomalies);
+         let scoped_pdu = scoped_outcome.value;
++        self.inner.transport.observe_decoded_pdu(&scoped_pdu.pdu)?;
+ 
+         if !msg_ids.contains(&raw.global_data.msg_id) {
+             return Ok(Candidate::Reject);

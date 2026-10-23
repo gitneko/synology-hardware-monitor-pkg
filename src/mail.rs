@@ -106,6 +106,7 @@ impl Event {
             "recovery" => "Entwarnung",
             "repeat" => "Wiederholung",
             "hardware_log" => "Hardwarelog",
+            "snmp_trap" => "SNMP-Trap",
             "test" => "Testmail",
             _ => "Ereignis",
         };
@@ -142,6 +143,30 @@ impl Event {
             ("event_id", self.id.to_string()),
             ("time", time),
             ("resource", self.resource.clone()),
+            (
+                "source",
+                self.context
+                    .as_ref()
+                    .and_then(|c| c["source"].as_str())
+                    .unwrap_or("unknown")
+                    .to_owned(),
+            ),
+            (
+                "verified",
+                self.context
+                    .as_ref()
+                    .and_then(|c| c["verified"].as_bool())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+            ),
+            (
+                "provisional",
+                self.context
+                    .as_ref()
+                    .and_then(|c| c["provisional"].as_bool())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+            ),
         ]
     }
 }

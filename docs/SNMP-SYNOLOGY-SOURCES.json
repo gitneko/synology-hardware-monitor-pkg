@@ -1,0 +1,32 @@
+{
+  "checked_on": "2026-10-21",
+  "purpose": "Numeric OID/type/status/unit verification only; no vendor MIB, PDF or ZIP distributed or loaded at runtime.",
+  "sources": {
+    "guide.pdf": {
+      "url": "https://global.download.synology.com/download/Document/Software/DeveloperGuide/Firmware/DSM/All/enu/Synology_DiskStation_MIB_Guide.pdf",
+      "sha256": "6a48f26b2f59f2dd7a7c12299f8cbec52d1006f16fff8f2e1c5fc16141bf4404"
+    },
+    "mibs.zip": {
+      "url": "https://global.download.synology.com/download/Document/Software/DeveloperGuide/Firmware/SynologyOS/All/enu/Synology_MIB_File.zip",
+      "sha256": "6514007468a577a3483e35c03280e0c36dc269658f4270756507073c646fe781"
+    },
+    "SYNOLOGY-SYSTEM-MIB.txt": {
+      "container": "mibs.zip",
+      "sha256": "30e80d22c646b9de29ed50a6b2c1068088208b44efb255d23475acd5369c3421"
+    },
+    "SYNOLOGY-DISK-MIB.txt": {
+      "container": "mibs.zip",
+      "sha256": "a6c85089190a95fea7b94483113f24fdfc23ad3ea1d03b96d790a73ef14c2a7c"
+    },
+    "SYNOLOGY-RAID-MIB.txt": {
+      "container": "mibs.zip",
+      "sha256": "1f125828800969dab70a9ca8da5f909f81eaab3804b5f9b2b7e432a28196b9c3"
+    }
+  },
+  "reconciliation": [
+    "Guide: systemStatus is system-partition status, not hardware rollup.",
+    "diskSerialNumber is OCTET STRING in official MIB; guide Integer type is inconsistent. Optional actual unique serials accepted, never required for DSM.",
+    "Guide extends raidStatus beyond the older MIB range: 13..20 are maintenance; 21 unknown. No DSM Enterprise raidSummary mapping.",
+    "Guide introduction: DSM does not support SNMP traps."
+  ]
+}
