@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {overall,measurementSnapshot,primaryAlarms,summaryAlarms,alarmConfirmation,coveredLabels,assessmentReason,observationStatus,observationLabel} from '../src/health.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {overall,measurementSnapshot,primaryAlarms,summaryAlarms,alarmConfirmation,coveredLabels,assessmentReason,observationStatus,observationLabel,retainedObservationStatus} from '../src/health.js';
 const device=()=>({stale:false,alarms:[],snapshot:{observations:[{key:'fan',health:'ok'}],capabilities:[{outcome:'available'}]}});
 
 test('devices without usable measurements stay unknown and have no detail snapshot',()=>{
@@ -26,13 +26,22 @@ test('disabled functions, proven empty controllers and pure power measurements a
  }
  d.snapshot.observations.push({key:'unassessed-disk',health:'unknown'});assert.equal(overall(d),'unknown');
 });
-test('absent placeholders stay neutral but retained incident assessment and faults win',()=>{
+test('absent current rows and retained incident severity are shown separately',()=>{
  const d=device(),o={key:'absent-fan',health:'unknown',reading:null};
  d.snapshot.observations.push(o);d.snapshot.assessment_exclusions={[o.key]:'absent'};
  assert.equal(overall(d),'ok');assert.equal(observationLabel(o,d.snapshot,d),'Nicht vorhanden');
  d.alarms=[{key:o.key,health:'critical'}];d.alarm_statuses={[o.key]:{status:'critical'}};
- assert.equal(overall(d),'critical');assert.equal(observationLabel(o,d.snapshot,d),'Kritisch');
- for(const health of ['warning','critical']){o.health=health;assert.equal(assessmentReason(o,d.snapshot),'');}
+ assert.equal(overall(d),'critical');assert.equal(observationLabel(o,d.snapshot,d),'Nicht vorhanden');
+ assert.equal(observationStatus(o,d.snapshot,d),'not_applicable');
+ assert.equal(retainedObservationStatus(o,d.snapshot,d),'critical');
+ for(const status of ['warning','acknowledged']){
+  d.alarm_statuses[o.key].status=status;
+  assert.equal(observationLabel(o,d.snapshot,d),'Nicht vorhanden');
+  assert.equal(retainedObservationStatus(o,d.snapshot,d),status);
+ }
+ d.alarm_statuses[o.key].status='unexpected';assert.equal(retainedObservationStatus(o,d.snapshot,d),'');
+ delete d.alarm_statuses[o.key];assert.equal(retainedObservationStatus(o,d.snapshot,d),'');
+ for(const health of ['warning','critical']){o.health=health;assert.equal(assessmentReason(o,d.snapshot),'');assert.equal(observationStatus(o,d.snapshot,d),health);assert.equal(retainedObservationStatus(o,d.snapshot,d),'');}
 });
 test('neutral rows cannot suppress faults, stale readings or missing coverage',()=>{
  const d=device();const o={key:'controller',health:'unknown'};

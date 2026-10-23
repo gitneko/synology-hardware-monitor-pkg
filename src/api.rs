@@ -73,6 +73,14 @@ pub enum Operation {
         acknowledged: bool,
         reason: String,
     },
+    AlarmReset {
+        id: String,
+        revision: i64,
+        key: String,
+        token: String,
+        #[serde(default)]
+        confirm: bool,
+    },
     EventsExport {
         filter: crate::history::Filter,
     },
@@ -312,6 +320,24 @@ impl Api {
                     token,
                     *acknowledged,
                     reason,
+                    actor,
+                    crate::now(),
+                )?;
+                Ok(json!({"ok":true}))
+            }
+            Operation::AlarmReset {
+                id,
+                revision,
+                key,
+                token,
+                confirm,
+            } => {
+                anyhow::ensure!(*confirm, BoundaryError("maintenance_confirmation_required"));
+                self.store.lock().unwrap().reset_alarm(
+                    id,
+                    *revision,
+                    key,
+                    token,
                     actor,
                     crate::now(),
                 )?;
@@ -1059,6 +1085,109 @@ mod tests {
             "alarm_conflict"
         );
     }
+
+    #[tokio::test]
+    async fn alarm_reset_requires_admin_csrf_confirmation_and_the_captured_incident() {
+        let (_dir, api) = instance();
+        let (device, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &input()).unwrap();
+        {
+            let mut store = api.store.lock().unwrap();
+            store.put(&device, &secret).unwrap();
+            store
+                .apply(
+                    &device,
+                    &crate::model::Snapshot {
+                        observations: vec![crate::model::Observation {
+                            key: "psu".into(),
+                            label: "PSU".into(),
+                            health: crate::model::Health::Warning,
+                            reading: None,
+                            unit: None,
+                        }],
+                        ..Default::default()
+                    },
+                    crate::now(),
+                )
+                .unwrap();
+        }
+        let token = api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            ["psu"]["token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let operation = |confirm| Operation::AlarmReset {
+            id: device.id.clone(),
+            revision: 1,
+            key: "psu".into(),
+            token: token.clone(),
+            confirm,
+        };
+        let req = request(&api, operation(true));
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&req, "admin-test", Role::Viewer)
+                    .await
+                    .unwrap_err()
+            ),
+            "write_administrator_required"
+        );
+        let mut invalid = request(&api, operation(true));
+        invalid.csrf = None;
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&invalid, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "write_csrf_invalid"
+        );
+        let invalid = request(&api, operation(false));
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&invalid, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "maintenance_confirmation_required"
+        );
+        let gate = api.mail_gate.lock().await;
+        let mut action = Box::pin(api.authorized(&req, "admin-test", Role::Administrator));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut action)
+                .await
+                .is_err()
+        );
+        assert!(
+            api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarm_statuses"]
+                .get("psu")
+                .is_some()
+        );
+        drop(gate);
+        action.await.unwrap();
+        {
+            let store = api.store.lock().unwrap();
+            assert!(store.dashboard().unwrap()["devices"][0]["alarm_statuses"]
+                .get("psu")
+                .is_none());
+            assert_eq!(store.event_entries(-1).unwrap().len(), 1);
+            assert!(store
+                .audit_entries()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["action"] == "alarm.reset" && e["actor"] == "admin-test"));
+        }
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(&req, "admin-test", Role::Administrator)
+                    .await
+                    .unwrap_err()
+            ),
+            "alarm_conflict"
+        );
+    }
+
     #[test]
     fn connection_response_errors_have_specific_translated_messages() {
         for code in [

@@ -43,3 +43,7 @@ Automated local tests cover both queues, restart, recovery/reappearance, worseni
 ## Upgrade from build 0028
 
 Build 0028 could revoke an acknowledgement of a retained fault made while the server was off when the first powered-on poll supplied identity or condition details. The audit reason was `Fehlermerkmale geändert`. Build 0029 corrects this comparison and preserves the acknowledgement across that transition. Acknowledgements already revoked by 0028 must be set again deliberately; the fix does not reconstruct and activate past suppression decisions from audit text.
+
+## Resetting an incident
+
+Build 0037 additionally supports removing an individual stored incident without deleting its event history. Unlike acknowledgement, reset removes the incident from the current alarm list and permits a still-reported fault to create a new incident on the next poll. See [Reset stored alarm](ALARM-RESET.md).

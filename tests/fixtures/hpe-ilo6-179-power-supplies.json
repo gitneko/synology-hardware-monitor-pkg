@@ -1,0 +1,55 @@
+{
+  "description": "Reduced live DL20 Gen11 / iLO 6 v1.79 responses, 2026-10-22. The modern absent PSU has no Oem object. No credentials or installed PSU serials.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Chassis/1/Power/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/Power/",
+        "PowerSupplies": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerSupplies/1",
+            "MemberId": "1",
+            "Oem": {
+              "Hpe": {
+                "@odata.context": "/redfish/v1/$metadata#HpeServerPowerSupply.HpeServerPowerSupply",
+                "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+                "BayNumber": 2
+              }
+            },
+            "Status": {
+              "Health": "Warning",
+              "State": "Absent"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+      "body": {
+        "@odata.context": "/redfish/v1/$metadata#PowerSupply.PowerSupply",
+        "@odata.etag": "W/\"F9D71689\"",
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "Id": "1",
+        "FirmwareVersion": "0.00",
+        "HotPluggable": false,
+        "Manufacturer": null,
+        "Metrics": {
+          "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/Metrics"
+        },
+        "Model": null,
+        "Name": "HpeServerPowerSupply",
+        "PowerCapacityWatts": 0,
+        "PowerSupplyType": "AC",
+        "SerialNumber": null,
+        "SparePartNumber": null,
+        "Status": {
+          "Health": "Warning",
+          "State": "Absent"
+        },
+        "Version": null
+      }
+    }
+  ]
+}

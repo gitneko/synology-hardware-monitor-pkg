@@ -26,7 +26,12 @@ export function assessmentReason(observation,snapshot) {
     default:return '';
   }
 }
-export function observationStatus(observation,snapshot,device) {return device?.alarm_statuses?.[observation.key]?.status??( assessmentReason(observation,snapshot)?'not_applicable':observation.health);}
+export function observationStatus(observation,snapshot,device) {return assessmentReason(observation,snapshot)?'not_applicable':(device?.alarm_statuses?.[observation.key]?.status??observation.health);}
+export function retainedObservationStatus(observation,snapshot,device) {
+  if(!assessmentReason(observation,snapshot))return '';
+  const status=device?.alarm_statuses?.[observation.key]?.status;
+  return ['warning','critical','acknowledged'].includes(status)?status:'';
+}
 export function observationLabel(observation,snapshot,device) {
   const status=observationStatus(observation,snapshot,device);
   if(status!=='not_applicable')return labels[status];

@@ -324,6 +324,12 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             worker=threading.Thread(target=mock_reply);worker.start()
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
             assert not worker.is_alive() and received[-1]["operation"]==pinned["operation"]
+            # Explicit, incident-bound reset survives the same CGI bridge.
+            reset={"csrf":"synthetic-package-token","operation":{"action":"alarm_reset","id":"synthetic-device","revision":1,"key":"/redfish/v1/Chassis/1/Power/#PowerSupplies/1","token":"synthetic-incident-token","confirm":True}}
+            payload=json.dumps(reset).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
+            worker=threading.Thread(target=mock_reply);worker.start()
+            posted=run("cgi",env=post_env,password=payload);worker.join(6)
+            assert not worker.is_alive() and received[-1]["operation"]==reset["operation"]
             # A backup larger than the normal form limit crosses the CGI bridge;
             # regular device forms retain their strict 128 KiB limit.
             backup={"csrf":"synthetic-package-token","operation":{"action":"backup_inspect","file":"A"*(200*1024),"password":"synthetic-backup-password"}}

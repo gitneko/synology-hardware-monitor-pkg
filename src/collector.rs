@@ -128,6 +128,7 @@ pub(crate) const LINK_KEYS: &[&str] = &[
     "Voltages",
     "PowerControl",
     "Redundancy",
+    "PowerSupplyRedundancy",
     "PowerSupplies",
     "Sensors",
     "LogServices",
@@ -888,6 +889,9 @@ fn unavailable(value: &Value) -> bool {
 }
 
 fn health(value: &Value) -> Health {
+    if crate::assessment::hpe_absent_power_supply_warning(value) {
+        return Health::Unknown;
+    }
     // Explicit BMC faults remain faults even when the failed component is offline.
     // Availability still prevents an OK status or stale readings being trusted.
     let fields = [
@@ -1059,6 +1063,9 @@ pub(crate) fn normalize(
                 unit,
             },
         );
+    }
+    for summary in crate::hpe_power::summaries(uri, value) {
+        normalize(uri, &summary, observations, logs);
     }
     for key in LINK_KEYS.iter().chain(["Members"].iter()) {
         if let Some(array) = value.get(*key).and_then(Value::as_array) {

@@ -135,6 +135,7 @@
   "Gespeicherte Angaben laden": "Load saved settings",
   "Gespeicherte Einstellungen wurden geändert. Bitte die aktuellen Angaben laden, bevor du speicherst.": "Saved settings have changed. Load the current settings before saving.",
   "Gespeicherter Fehler": "Retained fault",
+  "Gespeicherter Alarm:": "Retained alarm:",
   "Gespeicherter Fehler · aktuell nicht bewertbar": "Retained fault · currently unavailable for assessment",
   "Gespeichertes Zertifikat beibehalten": "Keep the saved certificate",
   "Gestartet": "Started",
@@ -485,5 +486,14 @@
   "Nicht vorhanden": "Not present",
   "Vom Gerät als nicht vorhanden gemeldet": "Reported as not present by the device",
   "Controller ohne Laufwerke": "Controller without drives",
-  "Information": "Information"
+  "Information": "Information",
+  "Gespeicherten Alarm zurückgesetzt": "Stored alarm reset",
+  "Gespeicherten Alarm zurücksetzen": "Reset stored alarm",
+  "Gespeicherten Alarm zurücksetzen …": "Reset stored alarm …",
+  "Alarm jetzt zurücksetzen": "Reset alarm now",
+  "Der gespeicherte Alarm und seine Bestätigung werden entfernt. Die Ereignishistorie und die aktuellen Messwerte bleiben erhalten. Noch ausstehende automatische Meldungen dazu werden storniert. Ein weiterhin gemeldeter Fehler wird bei der nächsten Abfrage erneut als neuer Alarm angelegt.": "The stored alarm and its acknowledgement will be removed. Event history and current measurements are preserved. Pending automatic notifications for this alarm will be cancelled. A fault that is still reported will create a new alarm at the next poll.",
+  "E-Mail: durch Zurücksetzen storniert · {0} bereits per SMTP angenommen": "Email: cancelled by alarm reset · {0} already accepted by SMTP",
+  "E-Mail: durch Zurücksetzen storniert": "Email: cancelled by alarm reset",
+  "{0} · DSM-Desktop: durch Zurücksetzen storniert": "{0} · DSM desktop: cancelled by alarm reset",
+  "Sammelzustände werden bei passenden verknüpften Komponentenfehlern gebündelt. Gespeicherte Fehler bleiben bis zur Entwarnung oder zum manuellen Zurücksetzen erhalten.": "Summary states are grouped with linked component faults where appropriate. Stored faults remain until recovery or manual reset."
 }

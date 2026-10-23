@@ -571,7 +571,12 @@ impl Store {
                 let covered = parsed
                     .as_ref()
                     .and_then(|s| s.notification_groups.get(&key))
-                    .cloned()
+                    .map(|keys| {
+                        keys.iter()
+                            .filter(|key| evaluation.statuses.contains_key(*key))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
                     .unwrap_or_default();
                 let current = parsed
                     .as_ref()
@@ -1325,6 +1330,67 @@ mod tests {
             .is_empty());
         assert_eq!(s.dashboard().unwrap()["events"][0]["kind"], "recovery");
     }
+
+    #[test]
+    fn ilo6_179_upgrade_keeps_retained_psu_incidents_separate_from_current_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = device();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.put(&d, b"synthetic-ciphertext").unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hpe-ilo6-179-power-supplies.json"
+        ))
+        .unwrap();
+        let mut applicability = crate::assessment::Applicability::default();
+        let mut observations = std::collections::BTreeMap::new();
+        for resource in fixture["resources"].as_array().unwrap() {
+            let uri = resource["uri"].as_str().unwrap();
+            applicability.observe(uri, &resource["body"]);
+            crate::collector::normalize(uri, &resource["body"], &mut observations, &mut Vec::new());
+        }
+        let after = Snapshot {
+            assessment_exclusions: applicability.exclusions(&observations),
+            observations: observations.into_values().collect(),
+            ..Default::default()
+        };
+        assert_eq!(after.assessment_exclusions.len(), 2);
+        let mut before = after.clone();
+        before.assessment_exclusions.clear();
+        for observation in &mut before.observations {
+            observation.health = Health::Warning;
+        }
+        let now = crate::now();
+        store.apply(&d, &before, now - 60).unwrap();
+        let count = store.event_entries(-1).unwrap().len();
+        store.apply(&d, &after, now).unwrap();
+        store.apply(&d, &after, now + 1).unwrap();
+        let dashboard = store.dashboard().unwrap();
+        let device = &dashboard["devices"][0];
+        assert_eq!(device["overall_status"], "warning");
+        assert_eq!(device["alarms"].as_array().unwrap().len(), 2);
+        for observation in &after.observations {
+            assert_eq!(observation.health, Health::Unknown);
+            assert_eq!(
+                device["snapshot"]["assessment_exclusions"][&observation.key],
+                "absent"
+            );
+            assert_eq!(
+                device["alarm_statuses"][&observation.key]["status"],
+                "warning"
+            );
+            assert_eq!(
+                device["alarm_statuses"][&observation.key]["acknowledged"],
+                false
+            );
+        }
+        assert!(device["alarms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["health"] == "warning" && a["current_health"] == "unknown"));
+        assert_eq!(store.event_entries(-1).unwrap().len(), count);
+    }
+
     #[test]
     fn transitions_unknown_restarts_and_durable_outbox() {
         let dir = tempfile::tempdir().unwrap();

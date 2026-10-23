@@ -56,6 +56,54 @@ fn child_key(parent: &str, name: &str, item: &Value, index: usize) -> String {
         .unwrap_or_else(|| crate::correlation::embedded_uri(parent, name, item, index))
 }
 
+// iLO 6 reports Warning for an empty PSU bay in both Power and PowerSubsystem.
+// iLO 6 v1.79 omits Oem in its modern view. In that case require both the
+// standard PowerSupply schema and HPE's exact supply name. Never use a name
+// alone or override a conflicting OEM payload. Inventory can remain populated
+// while the host is off; only independent fault evidence blocks neutral absence.
+pub(crate) fn hpe_absent_power_supply_warning(value: &Value) -> bool {
+    let typed_oem = value
+        .pointer("/Oem/Hpe/@odata.type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| {
+            kind.starts_with("#HpeServerPowerSupply.") && kind.ends_with(".HpeServerPowerSupply")
+        });
+    let standard_hpe = value
+        .get("@odata.type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("#PowerSupply.") && kind.ends_with(".PowerSupply"))
+        && value.get("Name").and_then(Value::as_str) == Some("HpeServerPowerSupply")
+        && value
+            .get("Oem")
+            .is_none_or(|v| v.as_object().is_some_and(|oem| oem.is_empty()));
+    (typed_oem || standard_hpe)
+        && value.pointer("/Status/State").and_then(Value::as_str) == Some("Absent")
+        && value.pointer("/Status/Health").and_then(Value::as_str) == Some("Warning")
+        && value
+            .pointer("/Status/HealthRollup")
+            .is_none_or(|v| v.is_null() || v.as_str() == Some("OK"))
+        && value.pointer("/Status/Conditions").is_none_or(|v| {
+            v.as_array().is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .all(|c| c.get("Severity").and_then(Value::as_str) == Some("OK"))
+            })
+        })
+        && value
+            .pointer("/Oem/Hpe/Mismatched")
+            .is_none_or(|v| v.as_bool() == Some(false))
+        && value.pointer("/Oem/Hpe/PowerSupplyStatus").is_none_or(|v| {
+            v.as_object().is_some_and(|status| {
+                status.is_empty()
+                    || (status.len() == 1
+                        && matches!(
+                            status.get("State").and_then(Value::as_str),
+                            Some("Ok" | "GoodInStandby")
+                        ))
+            })
+        })
+}
+
 impl Applicability {
     pub(crate) fn observe(&mut self, fallback: &str, value: &Value) {
         self.observe_context(fallback, value, None);
@@ -85,14 +133,15 @@ impl Applicability {
             facts.unavailable |= !matches!(state, "Disabled" | "Enabled");
         }
         facts.has_status |= value.get("Status").is_some();
-        facts.reported_fault |= ["/Status/Health", "/Status/HealthRollup"]
-            .iter()
-            .any(|path| {
-                matches!(
-                    value.pointer(path).and_then(Value::as_str),
-                    Some("Warning" | "Critical")
-                )
-            });
+        facts.reported_fault |= !hpe_absent_power_supply_warning(value)
+            && ["/Status/Health", "/Status/HealthRollup"]
+                .iter()
+                .any(|path| {
+                    matches!(
+                        value.pointer(path).and_then(Value::as_str),
+                        Some("Warning" | "Critical")
+                    )
+                });
         facts.reported_fault |= value
             .pointer("/Status/Conditions")
             .and_then(Value::as_array)
@@ -198,6 +247,9 @@ impl Applicability {
                         .keys()
                         .any(|k| k == "Volumes" || k.starts_with("Volumes@")),
             });
+        }
+        for summary in crate::hpe_power::summaries(key, value) {
+            self.observe_context(key, &summary, None);
         }
         for name in crate::collector::LINK_KEYS.iter().chain(["Members"].iter()) {
             if let Some(array) = value.get(*name).and_then(Value::as_array) {
@@ -373,6 +425,147 @@ mod tests {
         assert_eq!(evaluation.overall(Some(&snapshot), false), "ok");
         assert_eq!(evaluation.overall(Some(&snapshot), true), "unknown");
     }
+
+    fn ilo6_power_fixture() -> Vec<Value> {
+        serde_json::from_str::<Value>(include_str!(
+            "../tests/fixtures/hpe-ilo6-power-supplies.json"
+        ))
+        .unwrap()["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["body"].clone())
+            .collect()
+    }
+
+    #[test]
+    fn ilo6_empty_psu_bay_is_absent_in_both_redfish_views() {
+        let values = ilo6_power_fixture();
+        let (observations, exclusions) = assess(&values);
+        let absent_keys = [
+            "/redfish/v1/Chassis/1/Power/#PowerSupplies/1",
+            "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+        ];
+        assert_eq!(exclusions.len(), 2);
+        for key in absent_keys {
+            assert_eq!(observations[key].health, Health::Unknown);
+            assert_eq!(observations[key].reading, None);
+            assert_eq!(exclusions[key], AssessmentExclusion::Absent);
+        }
+        for key in [
+            "/redfish/v1/Chassis/1/Power/#PowerSupplies/0",
+            "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/",
+        ] {
+            assert_eq!(observations[key].health, Health::Ok);
+            assert!(!exclusions.contains_key(key));
+        }
+        // Preserve the original vendor response; absence is never fabricated OK.
+        assert_eq!(values[0]["PowerSupplies"][1]["Status"]["Health"], "Warning");
+        assert_eq!(values[2]["Status"]["Health"], "Warning");
+        let snapshot = crate::model::Snapshot {
+            observations: observations.into_values().collect(),
+            assessment_exclusions: exclusions,
+            ..Default::default()
+        };
+        let evaluation = crate::acknowledgement::Evaluation {
+            statuses: BTreeMap::new(),
+        };
+        assert_eq!(evaluation.overall(Some(&snapshot), false), "ok");
+        assert_eq!(evaluation.overall(Some(&snapshot), true), "unknown");
+    }
+
+    #[test]
+    fn ilo6_absence_exception_preserves_independent_faults() {
+        let absent = ilo6_power_fixture().pop().unwrap();
+        assert!(hpe_absent_power_supply_warning(&absent));
+        for (pointer, value) in [
+            ("/Status/State", json!("Enabled")),
+            ("/Status/State", json!("UnavailableOffline")),
+            ("/Status/Health", json!("Critical")),
+            ("/Status/HealthRollup", json!("Warning")),
+            ("/Status/HealthRollup", json!("Critical")),
+            ("/Status/Conditions", json!([{"Severity":"Warning"}])),
+            ("/Status/Conditions", json!([{"Severity":"Critical"}])),
+            ("/Status/Conditions", json!([{}])),
+            ("/Status/Conditions", Value::Null),
+            ("/Oem/Hpe/@odata.type", json!("#Other.v1_0_0.Other")),
+            ("/Oem/Hpe/PowerSupplyStatus", json!({"State":"Failed"})),
+            ("/Oem/Hpe/Mismatched", json!(true)),
+        ] {
+            let mut changed = absent.clone();
+            // The fixture contains no optional HealthRollup/Conditions/output fields.
+            let (parent, field) = pointer.rsplit_once('/').unwrap();
+            changed
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), value);
+            assert!(!hpe_absent_power_supply_warning(&changed), "{pointer}");
+            let (observations, exclusions) = assess(&[changed.clone()]);
+            let key = changed["@odata.id"].as_str().unwrap();
+            assert!(
+                matches!(observations[key].health, Health::Warning | Health::Critical),
+                "{pointer}"
+            );
+            assert!(!exclusions.contains_key(key), "{pointer}");
+        }
+        // An explicitly present representation prevents an absence exclusion.
+        let mut a = Applicability::default();
+        let key = absent["@odata.id"].as_str().unwrap();
+        a.observe(key, &absent);
+        a.observe(key, &json!({"Status":{"State":"Enabled"}}));
+        assert!(a
+            .exclusions(&observations(&[(key, Health::Unknown)]))
+            .is_empty());
+    }
+
+    #[test]
+    fn ilo6_179_standard_psu_without_oem_is_absent_but_requires_hpe_schema_evidence() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hpe-ilo6-179-power-supplies.json"
+        ))
+        .unwrap();
+        let values: Vec<Value> = fixture["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["body"].clone())
+            .collect();
+        let (obs, excluded) = assess(&values);
+        assert_eq!(excluded.len(), 2);
+        for (key, observation) in &obs {
+            assert_eq!(observation.health, Health::Unknown);
+            assert_eq!(excluded[key], AssessmentExclusion::Absent);
+        }
+        let original = &values[1];
+        assert!(original.get("Oem").is_none());
+        for (field, value) in [
+            ("Name", json!("Power Supply 2")),
+            ("Name", Value::Null),
+            ("@odata.type", json!("#Sensor.v1_0_0.Sensor")),
+            ("@odata.type", Value::Null),
+            ("Oem", json!({"OtherVendor":{}})),
+            ("Oem", Value::Null),
+            ("Oem", json!({"Hpe":{"@odata.type":"#Other.v1_0_0.Other"}})),
+            ("Status", json!({"State":"Enabled","Health":"Warning"})),
+            ("Status", json!({"State":"Absent","Health":"Critical"})),
+        ] {
+            let mut changed = original.clone();
+            changed[field] = value;
+            assert!(!hpe_absent_power_supply_warning(&changed), "{field}");
+            let (obs, excluded) = assess(&[changed.clone()]);
+            assert!(
+                matches!(
+                    obs[changed["@odata.id"].as_str().unwrap()].health,
+                    Health::Warning | Health::Critical
+                ),
+                "{field}"
+            );
+            assert!(excluded.is_empty(), "{field}");
+        }
+    }
+
     #[test]
     fn absent_is_not_neutral_when_another_representation_is_present_or_faulty() {
         for extra in [

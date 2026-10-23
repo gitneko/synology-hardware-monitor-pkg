@@ -2,6 +2,7 @@ pub mod api;
 mod assessment;
 pub mod collector;
 pub mod dsm;
+mod hpe_power;
 pub mod legacy_tls;
 pub mod model;
 pub mod store;

@@ -50,8 +50,14 @@ impl Evaluation {
         let Some(snapshot) = snapshot.filter(|_| !stale) else {
             return "unknown";
         };
-        for level in ["critical", "warning"] {
-            if self.statuses.values().any(|s| s.status == level) {
+        for (level, health) in [("critical", Health::Critical), ("warning", Health::Warning)] {
+            if self.statuses.values().any(|s| s.status == level)
+                || snapshot.observations.iter().any(|o| {
+                    hardware(&o.key) && o.health == health && !self.statuses.contains_key(&o.key)
+                })
+            {
+                // Reset removes the stored incident, not its last measurement.
+                // A still-faulty current reading must not make the device green.
                 return level;
             }
         }
@@ -449,6 +455,73 @@ pub(crate) fn suppress(
 }
 
 impl Store {
+    /// Remove one stored incident, without inventing a healthy measurement.
+    /// A later confirmed fault creates a new incident through normal polling.
+    pub fn reset_alarm(
+        &mut self,
+        id: &str,
+        revision: i64,
+        key: &str,
+        expected_token: &str,
+        actor: &str,
+        now: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            hardware(key) && !key.is_empty() && key.len() <= 4096,
+            BoundaryError("alarm_not_acknowledgeable")
+        );
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let row: Option<(i64, Option<String>)> = tx
+            .query_row(
+                "SELECT revision,snapshot FROM devices WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (current_revision, raw) = row.ok_or(BoundaryError("device_conflict"))?;
+        anyhow::ensure!(
+            current_revision == revision,
+            BoundaryError("device_conflict")
+        );
+        let snapshot: Option<Snapshot> = raw.map(|raw| serde_json::from_str(&raw)).transpose()?;
+        let evaluation = evaluate(&tx, id, snapshot.as_ref())?;
+        let status = evaluation
+            .statuses
+            .get(key)
+            .ok_or(BoundaryError("alarm_conflict"))?;
+        anyhow::ensure!(
+            status.token == expected_token,
+            BoundaryError("alarm_conflict")
+        );
+        anyhow::ensure!(!status.derived, BoundaryError("alarm_not_acknowledgeable"));
+
+        // Cancel only automatic jobs for this canonical resource. Historical
+        // events and explicitly requested manual replays remain independent.
+        for (column, queue) in [
+            ("mail_reason", "outbox"),
+            ("desktop_reason", "desktop_jobs"),
+        ] {
+            tx.execute(
+                &format!("UPDATE events SET {column}='reset' WHERE device=?1 AND (key=?2 OR canonical_key=?2) AND kind!='hardware_log' AND id IN (SELECT event_id FROM {queue} WHERE delivered IS NULL AND cancelled=0)"),
+                params![id, key],
+            )?;
+            tx.execute(
+                &format!("UPDATE {queue} SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1 AND (key=?2 OR canonical_key=?2) AND kind!='hardware_log')"),
+                params![id, key],
+            )?;
+        }
+        // alarm_control is removed by its existing ON DELETE CASCADE.
+        tx.execute(
+            "DELETE FROM alarm_state WHERE device=?1 AND key=?2",
+            params![id, key],
+        )?;
+        audit(&tx, actor, "alarm.reset", id, key, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn acknowledge_alarm(
         &mut self,
@@ -553,6 +626,340 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reset(s: &mut Store, d: &Device, key: &str, now: i64) {
+        let version = assessment(s, d, key).token;
+        let revision = s.get(&d.id).unwrap().unwrap().2;
+        s.reset_alarm(&d.id, revision, key, &version, "reset-admin", now)
+            .unwrap();
+    }
+
+    #[test]
+    fn powered_off_hpe_inventory_preserves_old_incident_until_reset_and_real_fault_rearms() {
+        let (_dir, mut s, d) = setup();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hpe-ilo6-179-power-off.json"
+        ))
+        .unwrap();
+        let mut observations = BTreeMap::new();
+        let mut applicability = crate::assessment::Applicability::default();
+        for resource in fixture["resources"].as_array().unwrap() {
+            let uri = resource["uri"].as_str().unwrap();
+            let body = &resource["body"];
+            applicability.observe(uri, body);
+            crate::collector::normalize(uri, body, &mut observations, &mut Vec::new());
+        }
+        let key = "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/";
+        let current = Snapshot {
+            assessment_exclusions: applicability.exclusions(&observations),
+            observations: observations.into_values().collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            current.assessment_exclusions[key],
+            AssessmentExclusion::Absent
+        );
+        let mut previous = current.clone();
+        previous.assessment_exclusions.remove(key);
+        previous
+            .observations
+            .iter_mut()
+            .find(|o| o.key == key)
+            .unwrap()
+            .health = Health::Warning;
+        let now = crate::now();
+        s.apply(&d, &previous, now - 60).unwrap();
+        let count = s.event_entries(-1).unwrap().len();
+        s.apply(&d, &current, now).unwrap();
+        assert_eq!(assessment(&s, &d, key).status, "warning");
+        assert_eq!(s.event_entries(-1).unwrap().len(), count);
+        reset(&mut s, &d, key, now + 1);
+        s.apply(&d, &current, now + 2).unwrap();
+        s.apply(&d, &current, now + 3).unwrap();
+        assert!(s.dashboard().unwrap()["devices"][0]["alarms"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(s.event_entries(-1).unwrap().len(), count);
+        let mut failed = current;
+        failed.assessment_exclusions.remove(key);
+        failed
+            .observations
+            .iter_mut()
+            .find(|o| o.key == key)
+            .unwrap()
+            .health = Health::Critical;
+        s.apply(&d, &failed, now + 4).unwrap();
+        let alarm = assessment(&s, &d, key);
+        assert_eq!(alarm.status, "critical");
+        assert!(!alarm.acknowledged);
+        assert_eq!(s.event_entries(-1).unwrap().len(), count + 1);
+    }
+
+    #[test]
+    fn resetting_absent_retained_alarm_preserves_history_measurements_and_other_incidents() {
+        let (dir, mut s, d) = setup();
+        let now = crate::now();
+        let old = Snapshot {
+            observations: vec![
+                Observation {
+                    key: "psu".into(),
+                    label: "Empty bay".into(),
+                    health: Health::Warning,
+                    reading: None,
+                    unit: None,
+                },
+                Observation {
+                    key: "drive".into(),
+                    label: "Drive".into(),
+                    health: Health::Critical,
+                    reading: None,
+                    unit: None,
+                },
+            ],
+            ..Default::default()
+        };
+        s.apply(&d, &old, now).unwrap();
+        let mut current = old;
+        current.observations[0].health = Health::Unknown;
+        current
+            .assessment_exclusions
+            .insert("psu".into(), AssessmentExclusion::Absent);
+        s.apply(&d, &current, now + 1).unwrap();
+        let before = s.event_entries(-1).unwrap();
+        let raw: String =
+            s.0.query_row("SELECT snapshot FROM devices WHERE id=?1", [&d.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        reset(&mut s, &d, "psu", now + 2);
+        let after = s.event_entries(-1).unwrap();
+        assert_eq!(before.len(), after.len());
+        for (a, b) in before.iter().zip(&after) {
+            for field in [
+                "id", "device", "key", "kind", "health", "message", "created",
+            ] {
+                assert_eq!(a[field], b[field], "{field}");
+            }
+        }
+        assert_eq!(
+            raw,
+            s.0.query_row::<String, _, _>(
+                "SELECT snapshot FROM devices WHERE id=?1",
+                [&d.id],
+                |r| r.get(0)
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            s.0.query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM alarm_control WHERE device=?1 AND key='psu'",
+                [&d.id],
+                |r| r.get(0)
+            )
+            .unwrap(),
+            0
+        );
+        let data = s.dashboard().unwrap();
+        assert!(data["devices"][0]["alarm_statuses"].get("psu").is_none());
+        assert_eq!(
+            data["devices"][0]["alarm_statuses"]["drive"]["status"],
+            "critical"
+        );
+        assert_eq!(
+            s.pending_mail(now + 2).unwrap().unwrap().event.resource,
+            "drive"
+        );
+        let desktop = s.pending_desktop(now + 2).unwrap().unwrap();
+        assert_eq!(
+            s.0.query_row::<String, _, _>(
+                "SELECT key FROM events WHERE id=?1",
+                [desktop.event_id],
+                |r| r.get(0)
+            )
+            .unwrap(),
+            "drive"
+        );
+        let reset_event = after.iter().find(|e| e["key"] == "psu").unwrap();
+        assert_eq!(reset_event["mail_reason"], "reset");
+        assert_eq!(reset_event["desktop_reason"], "reset");
+        s.apply(&d, &current, now + 3).unwrap();
+        drop(s);
+        let s = Store::open(dir.path()).unwrap();
+        assert!(s.dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            .get("psu")
+            .is_none());
+        assert_eq!(s.event_entries(-1).unwrap().len(), before.len());
+        assert!(s
+            .audit_entries()
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["action"] == "alarm.reset" && e["actor"] == "reset-admin"));
+    }
+
+    #[test]
+    fn resetting_a_current_or_acknowledged_fault_rearms_it_only_on_the_next_poll() {
+        for acknowledged in [false, true] {
+            let (_dir, mut s, d) = setup();
+            let now = crate::now();
+            let snap = Snapshot {
+                observations: vec![Observation {
+                    key: "fan".into(),
+                    label: "Fan".into(),
+                    health: Health::Critical,
+                    reading: None,
+                    unit: None,
+                }],
+                ..Default::default()
+            };
+            s.apply(&d, &snap, now).unwrap();
+            if acknowledged {
+                ack(&mut s, &d, "fan", true, now);
+            }
+            let old_token = assessment(&s, &d, "fan").token;
+            let count = s.event_entries(-1).unwrap().len();
+            reset(&mut s, &d, "fan", now + 1);
+            assert!(s.dashboard().unwrap()["devices"][0]["alarm_statuses"]
+                .get("fan")
+                .is_none());
+            assert_eq!(
+                s.dashboard().unwrap()["devices"][0]["overall_status"],
+                "critical"
+            );
+            assert_eq!(s.event_entries(-1).unwrap().len(), count);
+            s.apply(&d, &snap, now + 2).unwrap();
+            let status = assessment(&s, &d, "fan");
+            assert_eq!(status.status, "critical");
+            assert!(!status.acknowledged);
+            assert_ne!(status.token, old_token);
+            assert!(s
+                .reset_alarm(&d.id, 1, "fan", &old_token, "admin", now + 3)
+                .is_err());
+            assert_eq!(
+                s.event_entries(-1)
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e["key"] == "fan" && e["kind"] == "alarm")
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn reset_rejects_changed_versions_derived_summaries_and_non_hardware_scopes() {
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        s.apply(&d, &snapshot(Health::Critical, Health::Ok), now)
+            .unwrap();
+        let version = assessment(&s, &d, "fan").token;
+        for (id, revision, key, token) in [
+            (d.id.as_str(), 2, "fan", version.as_str()),
+            (d.id.as_str(), 1, "fan", "stale-token"),
+            ("missing", 1, "fan", version.as_str()),
+            (d.id.as_str(), 1, "missing", version.as_str()),
+            (d.id.as_str(), 1, "collector", version.as_str()),
+            (d.id.as_str(), 1, "coverage:/redfish/v1/", version.as_str()),
+            (d.id.as_str(), 1, "log:fan", version.as_str()),
+            (d.id.as_str(), 1, "", version.as_str()),
+        ] {
+            assert!(
+                s.reset_alarm(id, revision, key, token, "admin", now)
+                    .is_err(),
+                "{key}"
+            );
+        }
+        let parent = assessment(&s, &d, "system");
+        assert!(parent.derived);
+        assert!(s
+            .reset_alarm(&d.id, 1, "system", &parent.token, "admin", now)
+            .is_err());
+        reset(&mut s, &d, "fan", now + 1);
+        assert!(s
+            .reset_alarm(&d.id, 1, "fan", &version, "admin", now + 2)
+            .is_err());
+        assert!(s.dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            .get("system")
+            .is_some());
+    }
+
+    #[test]
+    fn resetting_canonical_alias_cancels_unsent_automatic_jobs_but_preserves_accepted_and_manual_delivery(
+    ) {
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        let mut snap = Snapshot {
+            observations: vec![Observation {
+                key: "legacy".into(),
+                label: "PSU".into(),
+                health: Health::Warning,
+                reading: None,
+                unit: None,
+            }],
+            ..Default::default()
+        };
+        s.apply(&d, &snap, now).unwrap();
+        let first = s.pending_mail(now).unwrap().unwrap();
+        s.finish_mail(&first, None, now).unwrap();
+        let id = s.event_entries(-1).unwrap()[0]["id"].as_i64().unwrap();
+        let preview = s
+            .preview_mail_replay(id, "first@example.invalid", "admin", now)
+            .unwrap();
+        s.enqueue_mail_replay(preview["id"].as_str().unwrap(), "admin", now)
+            .unwrap();
+        snap.observations[0].key = "modern".into();
+        snap.resource_aliases
+            .insert("legacy".into(), "modern".into());
+        s.apply(&d, &snap, now + 1).unwrap();
+        reset(&mut s, &d, "modern", now + 2);
+        quiet(&s, now + 2);
+        assert!(s.pending_mail_replay(now + 2).unwrap().is_some());
+        let event = s
+            .event_entries(-1)
+            .unwrap()
+            .into_iter()
+            .find(|e| e["id"] == id)
+            .unwrap();
+        assert_eq!(event["submitted_recipients"], 1);
+        assert_eq!(event["mail_reason"], "reset");
+        assert_eq!(event["desktop_reason"], "reset");
+    }
+
+    #[test]
+    fn resetting_a_retained_cause_does_not_hide_or_dangle_a_still_faulty_summary() {
+        let (_dir, mut s, d) = setup();
+        let now = crate::now();
+        let mut snap = snapshot(Health::Critical, Health::Ok);
+        s.apply(&d, &snap, now).unwrap();
+        snap.observations
+            .iter_mut()
+            .find(|o| o.key == "fan")
+            .unwrap()
+            .health = Health::Unknown;
+        snap.assessment_exclusions
+            .insert("fan".into(), AssessmentExclusion::Absent);
+        s.apply(&d, &snap, now + 1).unwrap();
+        reset(&mut s, &d, "fan", now + 2);
+        let data = s.dashboard().unwrap();
+        let parent = data["devices"][0]["alarms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["key"] == "system")
+            .unwrap();
+        assert_eq!(parent["covered_by"], json!([]));
+        assert_eq!(data["devices"][0]["overall_status"], "critical");
+        let count = s.event_entries(-1).unwrap().len();
+        s.apply(&d, &snap, now + 3).unwrap();
+        assert!(s.event_entries(-1).unwrap().len() > count);
+        assert!(s.dashboard().unwrap()["devices"][0]["alarm_statuses"]
+            .get("fan")
+            .is_none());
+        assert_eq!(assessment(&s, &d, "system").status, "critical");
+    }
+
     #[test]
     fn absent_sensor_exclusion_never_clears_a_retained_fault_or_its_acknowledgement() {
         let (_dir, mut s, d) = setup();

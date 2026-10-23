@@ -64,6 +64,22 @@ pub fn label(value: &str, language: Language) -> String {
     }
     let mut result = value.to_owned();
     for (de, en) in [
+        (
+            "Netzteile (HPE-Gesamtzustand)",
+            "Power supplies (HPE aggregate health)",
+        ),
+        ("Netzteilredundanz (HPE)", "Power supply redundancy (HPE)"),
+        ("Stromversorgungsdomäne (HPE)", "Power domain (HPE)"),
+    ] {
+        if let Some(suffix) = value
+            .strip_prefix(de)
+            .filter(|s| s.is_empty() || s.starts_with(" ["))
+        {
+            result = format!("{en}{suffix}");
+            break;
+        }
+    }
+    for (de, en) in [
         (" (Betrieb: ausgeschaltet)", " (power: off)"),
         (" (Betrieb: eingeschaltet)", " (power: on)"),
         (" (Betrieb: wird eingeschaltet)", " (power: powering on)"),
@@ -254,6 +270,33 @@ pub fn outcome(value: &str, language: Language) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hpe_power_assessment_labels_translate_without_changing_reported_values() {
+        for (de, en) in [
+            (
+                "Netzteile (HPE-Gesamtzustand)",
+                "Power supplies (HPE aggregate health)",
+            ),
+            (
+                "Netzteilredundanz (HPE) [FailedRedundant]",
+                "Power supply redundancy (HPE) [FailedRedundant]",
+            ),
+            (
+                "Netzteilredundanz (HPE) [2] [NonRedundant]",
+                "Power supply redundancy (HPE) [2] [NonRedundant]",
+            ),
+            ("Stromversorgungsdomäne (HPE) [2]", "Power domain (HPE) [2]"),
+        ] {
+            assert_eq!(label(de, Language::En), en);
+            assert_eq!(label(de, Language::De), de);
+        }
+        assert_eq!(
+            label("HpeServerPowerSupply", Language::En),
+            "HpeServerPowerSupply"
+        );
+    }
+
     #[test]
     fn dashboard_preserves_missing_measurements_in_both_languages() {
         for language in [Language::De, Language::En] {

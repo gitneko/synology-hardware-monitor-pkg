@@ -1,0 +1,173 @@
+{
+  "description": "Sanitized live iLO 6 PSU and aggregate/redundancy responses, 2026-10-22. Serial replaced; no credentials.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Systems/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Systems/1/",
+        "@odata.type": "#ComputerSystem.v1_19_0.ComputerSystem",
+        "Name": "Computer System",
+        "PowerState": "Off",
+        "Status": {
+          "Health": "OK",
+          "HealthRollup": "OK",
+          "State": "Disabled"
+        },
+        "Oem": {
+          "Hpe": {
+            "AggregateHealthStatus": {
+              "AggregateServerHealth": "OK",
+              "PowerSupplies": {
+                "PowerSuppliesMismatch": false,
+                "Status": {
+                  "Health": "OK"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/Power/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/Power/",
+        "@odata.type": "#Power.v1_7_1.Power",
+        "Name": "PowerMetrics",
+        "PowerControl": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerControl/0",
+            "MemberId": "0",
+            "PowerCapacityWatts": 1000,
+            "PowerConsumedWatts": 0,
+            "PowerMetrics": {
+              "AverageConsumedWatts": 0,
+              "IntervalInMin": 20,
+              "MaxConsumedWatts": 0,
+              "MinConsumedWatts": 0
+            }
+          }
+        ],
+        "PowerSupplies": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerSupplies/0",
+            "FirmwareVersion": "2.01",
+            "LastPowerOutputWatts": 0,
+            "LineInputVoltage": 0,
+            "LineInputVoltageType": "ACHighLine",
+            "Manufacturer": "ACBEL",
+            "MemberId": "0",
+            "Model": "P03178-B21",
+            "Name": "HpeServerPowerSupply",
+            "Oem": {
+              "Hpe": {
+                "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+                "AveragePowerOutputWatts": 0,
+                "BayNumber": 1,
+                "Domain": "System",
+                "HotplugCapable": false,
+                "MaxPowerOutputWatts": 0,
+                "Mismatched": false,
+                "PowerSupplyStatus": {
+                  "State": "Ok"
+                },
+                "Version": "01",
+                "iPDUCapable": false
+              }
+            },
+            "PowerCapacityWatts": 0,
+            "PowerSupplyType": "AC",
+            "SerialNumber": "TEST-PRESENT-PSU",
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerSupplies/1",
+            "MemberId": "1",
+            "Oem": {
+              "Hpe": {
+                "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+                "BayNumber": 2
+              }
+            },
+            "Status": {
+              "Health": "Warning",
+              "State": "Absent"
+            }
+          }
+        ],
+        "Oem": {
+          "Hpe": {
+            "@odata.type": "#HpePowerMetricsExt.v2_6_1.HpePowerMetricsExt"
+          }
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/",
+        "@odata.type": "#PowerSubsystem.v1_1_2.PowerSubsystem",
+        "Id": "PowerSubsystem",
+        "Batteries": {
+          "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/Batteries/"
+        },
+        "CapacityWatts": 1000.0,
+        "Name": "PowerSubsystem",
+        "PowerSupplies": {
+          "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/"
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/",
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "Id": "0",
+        "FirmwareVersion": "2.01",
+        "HotPluggable": false,
+        "Manufacturer": "ACBEL",
+        "Metrics": {
+          "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/Metrics"
+        },
+        "Model": "P03178-B21",
+        "Name": "HpeServerPowerSupply",
+        "PowerCapacityWatts": 0,
+        "PowerSupplyType": "AC",
+        "SerialNumber": "TEST-PRESENT-PSU",
+        "Status": {
+          "Health": "Warning",
+          "State": "Absent"
+        },
+        "Version": "01"
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "Id": "1",
+        "FirmwareVersion": "0.00",
+        "HotPluggable": false,
+        "Manufacturer": null,
+        "Metrics": {
+          "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/Metrics"
+        },
+        "Model": null,
+        "Name": "HpeServerPowerSupply",
+        "PowerCapacityWatts": 0,
+        "PowerSupplyType": "AC",
+        "SerialNumber": null,
+        "Status": {
+          "Health": "Warning",
+          "State": "Absent"
+        },
+        "Version": null
+      }
+    }
+  ]
+}

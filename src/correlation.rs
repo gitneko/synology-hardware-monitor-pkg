@@ -103,6 +103,13 @@ pub fn observe(fallback: &str, value: &Value, resources: &mut BTreeMap<String, R
             }
         }
     }
+    for summary in crate::hpe_power::summaries(key, value) {
+        let child = summary["@odata.id"]
+            .as_str()
+            .expect("local summary identity");
+        node.children.insert(child.into());
+        observe(child, &summary, resources);
+    }
     if let Some(rel) = value.get("Links") {
         for name in [
             "PoweredBy",

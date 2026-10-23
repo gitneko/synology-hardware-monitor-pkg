@@ -1,0 +1,105 @@
+{
+  "description": "Reduced, sanitized live HPE ProLiant DL20 Gen11 / iLO 6 v1.71 power responses, 2026-10-22. Present PSU serial replaced; no credentials.",
+  "resources": [
+    {
+      "uri": "/redfish/v1/Chassis/1/Power/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/Power/",
+        "@odata.type": "#Power.v1_7_1.Power",
+        "PowerSupplies": [
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerSupplies/0",
+            "MemberId": "0",
+            "Name": "HpeServerPowerSupply",
+            "Model": "P03178-B21",
+            "SerialNumber": "TEST-PRESENT-PSU",
+            "Manufacturer": "ACBEL",
+            "PowerCapacityWatts": 1000,
+            "LastPowerOutputWatts": 29,
+            "Oem": {
+              "Hpe": {
+                "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+                "BayNumber": 1,
+                "PowerSupplyStatus": {
+                  "State": "Ok"
+                }
+              }
+            },
+            "Status": {
+              "Health": "OK",
+              "State": "Enabled"
+            }
+          },
+          {
+            "@odata.id": "/redfish/v1/Chassis/1/Power/#PowerSupplies/1",
+            "MemberId": "1",
+            "Oem": {
+              "Hpe": {
+                "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+                "BayNumber": 2
+              }
+            },
+            "Status": {
+              "Health": "Warning",
+              "State": "Absent"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/0/",
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "Id": "0",
+        "Name": "HpeServerPowerSupply",
+        "Model": "P03178-B21",
+        "SerialNumber": "TEST-PRESENT-PSU",
+        "Manufacturer": "ACBEL",
+        "PowerCapacityWatts": 1000,
+        "Oem": {
+          "Hpe": {
+            "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+            "PowerSupplyStatus": {},
+            "iPDU": {
+              "iPDUStatus": {}
+            }
+          }
+        },
+        "Status": {
+          "Health": "OK",
+          "State": "Enabled"
+        }
+      }
+    },
+    {
+      "uri": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+      "body": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/1/",
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "Id": "1",
+        "Name": "HpeServerPowerSupply",
+        "FirmwareVersion": "0.00",
+        "Model": null,
+        "SerialNumber": null,
+        "Manufacturer": null,
+        "SparePartNumber": null,
+        "PowerCapacityWatts": 0,
+        "Oem": {
+          "Hpe": {
+            "@odata.type": "#HpeServerPowerSupply.v2_1_0.HpeServerPowerSupply",
+            "PowerSupplyStatus": {},
+            "iPDU": {
+              "iPDUStatus": {}
+            }
+          }
+        },
+        "Status": {
+          "Health": "Warning",
+          "State": "Absent"
+        }
+      }
+    }
+  ]
+}

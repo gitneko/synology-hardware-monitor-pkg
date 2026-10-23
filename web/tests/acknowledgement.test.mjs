@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {createSSRApp} from 'vue';
 import {renderToString} from '@vue/server-renderer';
 import {createServer} from 'vite';
-import {acknowledgementOperation} from '../src/alarm-actions.js';
+import {acknowledgementOperation,resetAlarmOperation} from '../src/alarm-actions.js';
 import {overall,observationStatus,observationLabel} from '../src/health.js';
 import {deliveryText} from '../src/events.js';
 
@@ -19,6 +19,18 @@ test('operator actions target the displayed incident and require a bounded reaso
  assert.throws(()=>acknowledgementOperation(d,{...a,assessment:{}},true,'reason'));
  assert.equal(acknowledgementOperation(d,a,false).acknowledged,false);
 });
+
+test('reset targets one captured incident and requires explicit confirmation',()=>{
+ const d=device(),a=alarm();
+ assert.throws(()=>resetAlarmOperation(d,a));
+ assert.throws(()=>resetAlarmOperation(d,a,false));
+ assert.deepEqual(resetAlarmOperation(d,a,true),{action:'alarm_reset',id:'server',revision:7,key:'fan',token:a.assessment.token,confirm:true});
+ for(const key of ['collector','coverage:/redfish/v1/','log:fan',''])assert.throws(()=>resetAlarmOperation(d,{...a,key},true));
+ for(const assessment of [{},{...a.assessment,derived:true}])assert.throws(()=>resetAlarmOperation(d,{...a,assessment},true));
+ assert.match(deliveryText({mail_reason:'reset',desktop_reason:'reset',submitted_recipients:1}),/Zurücksetzen storniert/);
+ assert.match(deliveryText({mail_reason:'reset',desktop_reason:'reset',submitted_recipients:1}),/1 bereits per SMTP angenommen/);
+});
+
 test('server assessment drives rows and overall state while raw severity and uncertainty survive',()=>{
  const d=device(),o=d.snapshot.observations[0];
  assert.equal(overall(d),'acknowledged');assert.equal(observationStatus(o,d.snapshot,d),'acknowledged');assert.equal(observationLabel(o,d.snapshot,d),'Bestätigt');
@@ -38,7 +50,7 @@ test('alarm controls expose reasons and review state, and keep viewers and deriv
   const {default:Row}=await server.ssrLoadModule('/src/AlarmRow.vue');
   const a=alarm(),d=device(),dashboard={user:{role:'administrator'}};
   let html=await renderToString(createSSRApp(Row,{alarm:a,device:d,dashboard}));
-  assert.match(html,/Bestätigen …/);assert.match(html,/textarea[^>]*required/);assert.match(html,/Neue Hardwarelog-Einträge bleiben separat aktiv/);
+  assert.match(html,/Bestätigen …/);assert.match(html,/Gespeicherten Alarm zurücksetzen …/);assert.match(html,/textarea[^>]*required/);assert.match(html,/Neue Hardwarelog-Einträge bleiben separat aktiv/);
   a.assessment.status='acknowledged';a.assessment.acknowledgement={actor:'operator',created:100,reason:'<script>unsafe</script>',needs_review:false};
   html=await renderToString(createSSRApp(Row,{alarm:a,device:d,dashboard}));
   assert.match(html,/Bestätigung aufheben …/);assert.match(html,/Hardwarezustand:/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<script>unsafe/);
