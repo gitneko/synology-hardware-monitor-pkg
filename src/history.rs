@@ -49,7 +49,7 @@ impl Store {
             .map(|v| v.0)
             .unwrap_or_else(|| crate::mail::Settings::default_for(language));
         let zone: chrono_tz::Tz = settings.timezone.parse()?;
-        let mut csv = String::from("\u{feff}");
+        let mut csv = String::new();
         let headers = [
             "Ereignis-ID",
             "Erfasst (UTC)",
@@ -182,6 +182,30 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn csv_starts_with_localized_header_without_bom_for_empty_and_populated_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        for expected_count in 0..=1 {
+            if expected_count == 1 {
+                store.0.execute("INSERT INTO events(device,key,kind,health,message,created) VALUES('removed','ps1','alarm','\"warning\"','Überprüfung nötig',1)",[]).unwrap();
+            }
+            for (language, header) in [
+                (crate::i18n::Language::De, "\"Ereignis-ID\";"),
+                (crate::i18n::Language::En, "\"Event ID\";"),
+            ] {
+                let (csv, count) = store
+                    .events_csv_localized(&Filter::default(), language)
+                    .unwrap();
+                assert_eq!(count, expected_count);
+                assert!(!csv.as_bytes().starts_with(&[0xef, 0xbb, 0xbf]));
+                assert!(csv.starts_with(header));
+                if count == 1 {
+                    assert!(csv.contains("Überprüfung nötig"));
+                }
+            }
+        }
+    }
     #[test]
     fn unconfigured_csv_uses_language_defaults_and_localizes_missing_device_name() {
         let dir = tempfile::tempdir().unwrap();

@@ -1423,7 +1423,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(csv["count"], 0);
-        assert!(csv["file"].as_str().unwrap().starts_with('\u{feff}'));
+        assert!(csv["file"]
+            .as_str()
+            .unwrap()
+            .starts_with("\"Ereignis-ID\";"));
         assert!(api
             .authorized(
                 &request(&api, Operation::EventsClear { confirm: false }),

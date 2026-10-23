@@ -34,7 +34,7 @@ Events normally retain up to 90 days of history, while pending jobs are preserve
 
 ## Export and restore
 
-CSV uses UTF-8 with BOM, semicolons, quoted fields, spreadsheet-formula neutralization and UTC plus configured local timestamps. Event clearing removes events and their delivery jobs transactionally, preserves active alarms/fingerprints/audit and restarts reminder timing. An event counter avoids reusing cleared event numbers.
+CSV uses UTF-8 without BOM, semicolons, quoted fields, spreadsheet-formula neutralization and UTC plus configured local timestamps. Event clearing removes events and their delivery jobs transactionally, preserves active alarms/fingerprints/audit and restarts reminder timing. An event counter avoids reusing cleared event numbers.
 
 App backups use a fixed logical schema, authenticated encryption and password derivation. Import never executes SQL or accepts filesystem paths from the archive. Restore validates inside a transaction, re-encrypts secrets with the local key, preserves/merges audit history, invalidates stale editor/poll revisions, pauses devices/channels and cancels pending historical jobs. See [Backup and restore](BACKUP-RESTORE.md).
 

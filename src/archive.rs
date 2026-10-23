@@ -856,7 +856,7 @@ mod tests {
         // CSV exports retained history, quoted multiline data; clear keeps alarm and audit state.
         let (csv, count) = t.events_csv(&Default::default()).unwrap();
         assert_eq!(count, 1);
-        assert!(csv.starts_with('\u{feff}'));
+        assert!(csv.starts_with("\"Ereignis-ID\";"));
         assert!(csv.contains("Backup-Test"));
         assert_eq!(t.clear_events("target-admin").unwrap(), 1);
         let view = t.dashboard().unwrap();
