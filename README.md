@@ -82,3 +82,7 @@ python tools/smtp_integration_test.py target/debug/hardware-monitor
 ```
 
 Integration tests use synthetic loopback servers and OpenSSL-generated test certificates. They do not replace positive DSM/hardware acceptance. NAS packages require a statically linked musl build; do not copy a host-glibc binary into an SPK. Exact commands and toolchain boundaries are in [Development](docs/DEVELOPMENT.md).
+
+## Local development without DSM
+
+Run `python3 tools/dev.py` from the project root, then open <http://127.0.0.1:18774/>. The complete frontend and backend run without an application login or SPK build, with persistent local state and real Redfish connections. Device credentials and certificate checks remain required. This optional mode is excluded from normal DSM builds. SNMP is not yet implemented. See [Development](docs/DEVELOPMENT.md) for requirements and details.

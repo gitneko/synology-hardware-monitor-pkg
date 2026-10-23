@@ -185,6 +185,10 @@ impl Api {
             self.authorized(&request, &actor, role).await
         }
         .await;
+        self.response(result, language)
+    }
+
+    fn response(&self, result: Result<Value>, language: crate::i18n::Language) -> Value {
         match result {
             Ok(mut value) => {
                 for field in ["message", "error"] {
@@ -200,7 +204,28 @@ impl Api {
         }
     }
 
+    // Only the feature-gated loopback HTTP adapter can enter this path. Nothing
+    // in the serialized DSM Request selects local authentication.
+    #[cfg(feature = "local-dev")]
+    pub(crate) async fn handle_local(&self, request: Request) -> Value {
+        let language = request.locale;
+        let result = self
+            .authorized_inner(&request, "local-developer", Role::Administrator, true)
+            .await;
+        self.response(result, language)
+    }
+
     async fn authorized(&self, request: &Request, actor: &str, role: Role) -> Result<Value> {
+        self.authorized_inner(request, actor, role, false).await
+    }
+
+    async fn authorized_inner(
+        &self,
+        request: &Request,
+        actor: &str,
+        role: Role,
+        local: bool,
+    ) -> Result<Value> {
         if matches!(request.operation, Operation::Dashboard) {
             if request.auth.diagnostic {
                 return Ok(json!({"ok":true,"code":"authenticated"}));
@@ -227,12 +252,18 @@ impl Api {
                 }
             }
             crate::i18n::dashboard(&mut data, request.locale);
+            if local {
+                data["runtime"] = json!("local-development");
+            }
             data["user"] = json!({"name":actor,"role":role});
             let (mut policy, policy_revision) = store.notification_settings()?;
+            if local {
+                policy.desktop_enabled = false;
+            }
             if policy_revision == 0 {
                 policy.language = request.locale;
             }
-            data["notifications"] = json!({"automatic_delivery":store.mail_enabled()||policy.desktop_enabled,"mail_enabled":store.mail_enabled(),"desktop_enabled":policy.desktop_enabled,"desktop_self_test_available":dsm::desktop_test_available()});
+            data["notifications"] = json!({"automatic_delivery":store.mail_enabled()||policy.desktop_enabled,"mail_enabled":store.mail_enabled(),"desktop_enabled":policy.desktop_enabled,"desktop_self_test_available":!local && dsm::desktop_test_available()});
             if role == Role::Administrator {
                 data["notification_settings"] =
                     json!({"settings":policy,"revision":policy_revision});
@@ -263,7 +294,12 @@ impl Api {
             role == Role::Administrator,
             BoundaryError("write_administrator_required")
         );
-        dsm::validate_write_context(&request.auth)?;
+        if !local {
+            dsm::validate_write_context(&request.auth)?;
+        }
+        if local && matches!(request.operation, Operation::DesktopTest { .. }) {
+            anyhow::bail!(BoundaryError("desktop_test_unavailable"));
+        }
         check_csrf(
             &self.vault,
             actor,
@@ -271,6 +307,11 @@ impl Api {
             request.csrf.as_deref().unwrap_or(""),
             crate::now(),
         )?;
+        if local
+            && matches!(&request.operation, Operation::NotificationSave { settings } if settings.desktop_enabled)
+        {
+            anyhow::bail!(BoundaryError("desktop_test_unavailable"));
+        }
         // Serialize config/device cancellation with SMTP submission. An already
         // submitted message cannot be recalled; no next recipient starts after a change.
         let _mail_guard = if matches!(request.operation, Operation::MailTest { .. }) {
@@ -550,8 +591,21 @@ impl Api {
     }
 
     pub async fn deliver_one_mail(&self) -> Result<()> {
+        self.deliver_mail(true).await
+    }
+
+    #[cfg(feature = "local-dev")]
+    pub async fn deliver_local_mail(&self) -> Result<()> {
+        self.deliver_mail(false).await
+    }
+
+    async fn deliver_mail(&self, desktop_enabled: bool) -> Result<()> {
         let _guard = self.mail_gate.lock().await;
-        let desktop = self.store.lock().unwrap().pending_desktop(crate::now())?;
+        let desktop = if desktop_enabled {
+            self.store.lock().unwrap().pending_desktop(crate::now())?
+        } else {
+            None
+        };
         if let Some(job) = desktop {
             let result = dsm::desktop_event(&job).await;
             self.store.lock().unwrap().finish_desktop(

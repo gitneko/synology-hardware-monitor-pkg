@@ -16,6 +16,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets --features local-dev -- -D warnings
+      - run: cargo build --locked --features local-dev
+      - run: python3 tools/local_dev_integration_test.py target/debug/hardware-monitor
       - run: python3 -m unittest discover -s tools/tests -v
   web:
     runs-on: ubuntu-24.04

@@ -37,6 +37,7 @@ segments=subprocess.check_output(['readelf','-l',str(binary)],text=True)
 dynamic=subprocess.check_output(['readelf','-d',str(binary)],text=True)
 assert 'Advanced Micro Devices X86-64' in header, 'Expected x86_64 binary for the selected Synology architecture'
 assert 'INTERP' not in segments and '(NEEDED)' not in dynamic, 'Refusing host-linked binary: build static musl target first'
+assert subprocess.run([str(binary),'dev','--help'],capture_output=True).returncode!=0, 'Refusing a binary with local development authentication'
 assert (a.ui_dist/'index.html').is_file(), 'Build Vue UI first'
 a.output.mkdir(parents=True,exist_ok=True)
 

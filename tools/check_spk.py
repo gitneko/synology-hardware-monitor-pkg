@@ -101,6 +101,7 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
             assert 'INTERP' not in subprocess.check_output(['readelf','-l',str(binary)],text=True)
             assert '(NEEDED)' not in subprocess.check_output(['readelf','-d',str(binary)],text=True)
             assert subprocess.check_output([str(binary),'--version']).strip()==f'hardware-monitor {version}'.encode()
+            assert subprocess.run([str(binary),'dev','--help'],capture_output=True).returncode!=0, 'Local development authentication must not be shipped in an SPK'
             cgi=temp/'ui/api.cgi';cgi.write_bytes(payload.extractfile('ui/api.cgi').read());cgi.chmod(0o755)
             response=subprocess.check_output([str(cgi)],env={**os.environ,'REQUEST_METHOD':'GET','HTTP_COOKIE':''})
             assert b'Status: 403 Forbidden' in response

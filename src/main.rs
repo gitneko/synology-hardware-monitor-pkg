@@ -74,6 +74,16 @@ enum Command {
         #[arg(long)]
         notify_dsm: bool,
     },
+    /// Run the full application on loopback without DSM login (development builds only).
+    #[cfg(feature = "local-dev")]
+    Dev {
+        #[arg(long, default_value = "local-state")]
+        directory: PathBuf,
+        #[arg(long, default_value_t = 18774)]
+        port: u16,
+        #[arg(long, default_value = "web/dist")]
+        web_root: PathBuf,
+    },
     /// DSM CGI bridge with server-side role, origin and CSRF enforcement.
     Cgi,
     /// Native DSM 7 lifecycle control under the package identity.
@@ -98,7 +108,16 @@ async fn main() -> Result<()> {
     {
         return cgi(Path::new("/var/packages/HardwareMonitor/etc/api.sock")).await;
     }
-    let cli = Cli::parse();
+    #[allow(unused_mut)]
+    let mut cli = Cli::parse();
+    #[cfg(feature = "local-dev")]
+    if let Command::Dev { directory, .. } = &cli.command {
+        anyhow::ensure!(
+            cli.state == Path::new("/var/packages/HardwareMonitor/etc/private"),
+            "use dev --directory for isolated development state"
+        );
+        cli.state = directory.clone();
+    }
     if matches!(cli.command, Command::Cgi) {
         return cgi(&cli.socket).await;
     }
@@ -183,7 +202,12 @@ async fn main() -> Result<()> {
             anyhow::ensure!(!failed, "one or more devices failed to poll");
         }
         Command::Serve { notify_dsm } => {
-            serve(cli.state, cli.socket, store, vault, notify_dsm).await?
+            serve(cli.state, cli.socket, store, vault, notify_dsm, None).await?
+        }
+        #[cfg(feature = "local-dev")]
+        Command::Dev { port, web_root, .. } => {
+            let config = hardware_monitor::local::Config::bind(port, web_root).await?;
+            serve(cli.state, cli.socket, store, vault, false, Some(config)).await?;
         }
         _ => unreachable!(),
     }
@@ -210,12 +234,18 @@ async fn poll(store: &mut Store, vault: &Vault, d: &Device, encrypted: &[u8]) ->
     }
 }
 
+#[cfg(feature = "local-dev")]
+type LocalConfig = hardware_monitor::local::Config;
+#[cfg(not(feature = "local-dev"))]
+type LocalConfig = ();
+
 async fn serve(
     state: PathBuf,
     socket: PathBuf,
     store: Store,
     vault: Arc<Vault>,
     notify: bool,
+    local: Option<LocalConfig>,
 ) -> Result<()> {
     let lock = OpenOptions::new()
         .read(true)
@@ -229,18 +259,29 @@ async fn serve(
         "daemon already running"
     );
     std::fs::write(state.join("daemon.pid"), std::process::id().to_string())?;
-    if socket.exists() {
-        std::fs::remove_file(&socket)?;
-    }
-    let listener = UnixListener::bind(&socket)
-        .context("create local API socket (parent directory must exist)")?;
-    // Every operation authenticates in the service; writes additionally require
-    // administrator role, trusted origin and a session-bound package CSRF token.
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666))?;
+    let development = local.is_some();
     let store = Arc::new(Mutex::new(store));
     let api_service = Arc::new(Api::new(store.clone(), vault.clone()));
     let worker_api = api_service.clone();
-    let api = tokio::spawn(async move { api_loop(listener, api_service).await });
+    let mut api = if !development {
+        if socket.exists() {
+            std::fs::remove_file(&socket)?;
+        }
+        let listener = UnixListener::bind(&socket)
+            .context("create local API socket (parent directory must exist)")?;
+        // DSM operations always authenticate in the service.
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666))?;
+        tokio::spawn(api_loop(listener, api_service))
+    } else {
+        #[cfg(feature = "local-dev")]
+        {
+            tokio::spawn(hardware_monitor::local::serve(local.unwrap(), api_service))
+        }
+        #[cfg(not(feature = "local-dev"))]
+        {
+            unreachable!()
+        }
+    };
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut due = HashMap::<String, (i64, Instant)>::new();
@@ -252,6 +293,7 @@ async fn serve(
     eprintln!("hardware-monitor started; legacy sysnotify delivery enabled={notify}; SMTP/desktop follow saved channel settings");
     loop {
         tokio::select! {
+            result = &mut api => { result??; anyhow::bail!("API listener stopped unexpectedly"); },
             _=terminate.recv()=>break,
             _=tokio::signal::ctrl_c()=>break,
             Some(completion)=jobs.join_next(),if !jobs.is_empty()=> {
@@ -276,7 +318,13 @@ async fn serve(
                 if !notify && delivery.is_empty() && Instant::now()>=next_delivery {
                     next_delivery=Instant::now()+Duration::from_secs(2);
                     let api=worker_api.clone();
-                    delivery.spawn(async move {if api.deliver_one_mail().await.is_err(){eprintln!("notification worker failed; details excluded");}});
+                    delivery.spawn(async move {
+                        #[cfg(feature = "local-dev")]
+                        let result = if development { api.deliver_local_mail().await } else { api.deliver_one_mail().await };
+                        #[cfg(not(feature = "local-dev"))]
+                        let result = api.deliver_one_mail().await;
+                        if result.is_err(){eprintln!("notification worker failed; details excluded");}
+                    });
                 }
                 if notify && delivery.is_empty() && Instant::now()>=next_delivery {
                     next_delivery=Instant::now()+Duration::from_secs(10);
@@ -290,7 +338,9 @@ async fn serve(
     delivery.abort_all();
     api.abort();
     while jobs.join_next().await.is_some() {}
-    std::fs::remove_file(&socket)?;
+    if !development {
+        std::fs::remove_file(&socket)?;
+    }
     std::fs::remove_file(state.join("daemon.pid"))?;
     drop(lock);
     Ok(())

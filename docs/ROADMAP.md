@@ -1,8 +1,10 @@
 # Implementation status and roadmap
 
-Current package build: **0.8.0-0027**, documentation updated on 19 October 2026.
+Current package build: **0.8.0-0039**, local development documentation updated on 23 October 2026.
 
 ## Implemented
+
+- Optional local development mode with the complete frontend/backend, persistent private state and real Redfish polling without DSM or application login. Excluded from normal SPKs; see [Development](DEVELOPMENT.md). SNMP remains unimplemented.
 
 - Least-privileged Rust/Tokio daemon, SQLite, integrated DSM 7 window and compiled CGI bridge; device CRUD, checked TLS/private CAs and encrypted credentials.
 - Read-only Redfish discovery/polling, standard health/sensors and selected storage/OEM links, log baseline/deduplication and reachability monitoring.

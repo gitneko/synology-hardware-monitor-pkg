@@ -6,6 +6,10 @@ license = "Apache-2.0"
 description = "Read-only multi-vendor hardware monitoring for Synology DSM"
 rust-version = "1.98"
 
+[features]
+# Excluded from normal builds and DSM packages.
+local-dev = ["hyper/server"]
+
 [dependencies]
 anyhow = "1"
 aes-gcm = "0.10"

@@ -14,7 +14,8 @@ async function save(){if(busy.value)return;busy.value=true;error.value='';messag
 <template><section class="panel device-editor notification-settings"><header><div><p class="eyebrow">{{t("BENACHRICHTIGUNGEN")}}</p><h2>{{t("Kanäle & Ereignisse")}}</h2><button class="refresh" :disabled="busy" @click="load">{{t("Gespeicherte Angaben laden")}}</button></div></header>
 <form @submit.prevent="save"><fieldset :disabled="busy">
 <p>{{t("Beim Gerät muss „Benachrichtigungen für dieses Gerät aktivieren“ eingeschaltet sein. Die folgenden Filter gelten gemeinsam für E-Mail und DSM-Desktop.")}}</p>
-<label class="check"><input v-model="form.desktop_enabled" type="checkbox">{{t("Automatische DSM-Desktopmeldungen aktivieren")}}</label>
+<p v-if="dashboard.runtime==='local-development'" class="form-note">{{t("DSM-Desktopmeldungen sind im lokalen Entwicklungsmodus nicht verfügbar.")}}</p>
+<label class="check"><input v-model="form.desktop_enabled" type="checkbox" :disabled="dashboard.runtime==='local-development'">{{t("Automatische DSM-Desktopmeldungen aktivieren")}}</label>
 <p class="form-note">{{t("Beim Speichern wird dein angemeldeter DSM-Benutzer")}} {{dashboard.user.name}} {{t("als Empfänger gesetzt. Aktuell gespeichert:")}} {{dashboard.notification_settings.settings.desktop_recipient??t("kein Empfänger")}}{{t(". E-Mail wird unabhängig davon unten eingerichtet.")}}</p>
 <p class="form-note">{{t("Die Desktopmeldung enthält Gerät und Meldung. Die Ereignisnummer verweist auf den Eintrag in Hardware Monitor.")}}</p>
 <label>{{t('Sprache der Desktopmeldungen')}}<select v-model="form.language"><option value="de">Deutsch</option><option value="en">English</option></select></label><p class="form-note">{{t('Die Hintergrundkanäle verwenden diese gespeicherte Sprache, unabhängig von der Oberflächensprache.')}}</p><h3>{{t("Ereignisauswahl")}}</h3>

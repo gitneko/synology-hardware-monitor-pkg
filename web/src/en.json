@@ -1,4 +1,9 @@
 {
+  "Lokale Anwendung wird geladen …": "Loading the local application …",
+  "Verbindung zum lokalen Entwicklungsdienst wird hergestellt.": "Connecting to the local development service.",
+  "Bitte den lokalen Entwicklungsdienst starten und erneut versuchen.": "Start the local development service and try again.",
+  "DSM-Desktopmeldungen sind im lokalen Entwicklungsmodus nicht verfügbar.": "DSM desktop notifications are unavailable in local development mode.",
+  "Lokale Entwicklung · ohne Login": "Local development · no login",
   "Abbrechen": "Cancel",
   "+ Gerät hinzufügen": "+ Add device",
   "Abfrage weiterhin gestört": "Monitoring query still failing",

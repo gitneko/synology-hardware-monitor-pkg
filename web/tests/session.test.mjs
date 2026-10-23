@@ -66,3 +66,21 @@ test('cookie-only DSM configuration still requires native API confirmation',asyn
   });
   assert.equal(calls,2);assert.deepEqual(s.dashboard,data);
 });
+
+test('explicit local runtime loads and administers without contacting DSM login',async()=>{
+  const {administer}=await import('../src/device-api.js');
+  globalThis.HARDWARE_MONITOR_LOCAL=true;
+  try{
+    const s={dashboard:null,error:'',authRequired:false};
+    const local={...data,csrf:'local-test-csrf',runtime:'local-development'};
+    await updateSession(s,async(url,options)=>{
+      assert.equal(url,'./api.cgi');assert.equal(options.headers['X-SYNO-TOKEN'],undefined);
+      return response({ok:true,data:local});
+    });
+    assert.equal(s.dashboard.runtime,'local-development');
+    await administer(local,{action:'events_clear',confirm:true},async(url,options)=>{
+      assert.equal(url,'./api.cgi');assert.equal(options.method,'POST');
+      assert.equal(JSON.parse(options.body).csrf,local.csrf);return response({ok:true});
+    });
+  }finally{delete globalThis.HARDWARE_MONITOR_LOCAL;}
+});

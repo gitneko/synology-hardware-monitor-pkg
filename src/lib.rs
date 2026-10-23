@@ -30,3 +30,6 @@ pub mod history;
 pub mod i18n;
 
 pub mod acknowledgement;
+
+#[cfg(feature = "local-dev")]
+pub mod local;
