@@ -175,3 +175,30 @@ The CGI integration regression now forwards a 33 MiB upload and checks an intact
 socket-based checks could not run in this restricted environment: TCP socket
 creation and Unix socket binding both return EPERM. Package lifecycle verification
 and target NAS upload/download acceptance therefore remain pending.
+
+
+## Build 0041: exact backup sizing and safe rejection details
+
+The build-0040 128/192 MiB bounds remain unchanged. Archive collection now counts
+the actual serialized JSON, including null/type wrappers, UTF-8, escapes, array
+and table separators, archive metadata, and converted credentials/certificates.
+The former per-cell estimate could reject an archive whose JSON fits the bound.
+A regression demonstrates this with small records, accepts the exact byte limit
+and rejects one byte less. Existing cross-key, legacy-format and large-history
+restore tests pass. Serialization also counts bytes before allocating plaintext
+for a rejected oversized archive. This remains an in-memory format-4 archive,
+not the proposed streaming redesign.
+
+Export-size failures now expose only byte counts, the fixed schema table where
+collection stopped, and a fixed phase code. These are lower-bound counts at the
+point of rejection; the table is not necessarily the largest contributor. The
+API test checks German/English messages and that private error context is never
+returned. No database records, paths, device identities or secrets are included.
+The actual NAS dataset has not been examined, so the cause of the reported
+build-0040 failure remains unconfirmed until the new diagnostic is available.
+
+Local validation: all 132 Rust tests, all 45 frontend tests, 19 Python tests,
+rustfmt, Clippy with normal/local-dev features, production Vue build and static
+generic x86-64 musl build pass. Socket-based CGI/TLS and native service lifecycle
+checks remain blocked by this execution environment's socket restrictions;
+NAS acceptance remains pending.

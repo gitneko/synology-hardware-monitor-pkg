@@ -201,7 +201,24 @@ impl Api {
                 value
             }
             Err(error) => {
-                json!({"ok":false,"code":dsm::error_code(&error),"error":crate::i18n::text(message(dsm::error_code(&error)),language)})
+                let code = dsm::error_code(&error);
+                let mut response = json!({"ok":false,"code":code,"error":crate::i18n::text(message(code),language)});
+                if code == "backup_too_large" {
+                    if let Some(size) = error.downcast_ref::<crate::archive::SizeLimit>() {
+                        let detail = crate::i18n::text(
+                            "Sicherungsinhalt: mindestens {0} MiB ({1} Byte); Grenze: {2} MiB; Tabelle beim Abbruch: {3}.",
+                            language,
+                        )
+                        .replace("{0}", &format!("{:.2}", size.bytes as f64 / 1048576.0))
+                        .replace("{1}", &size.bytes.to_string())
+                        .replace("{2}", &format!("{:.2}", size.limit as f64 / 1048576.0))
+                        .replace("{3}", size.table.unwrap_or("—"));
+                        response["error"] =
+                            json!(format!("{} {detail}", response["error"].as_str().unwrap()));
+                        response["backup_size"] = json!(size);
+                    }
+                }
+                response
             }
         }
     }
@@ -1374,6 +1391,38 @@ mod tests {
             operation,
             csrf,
         }
+    }
+    #[test]
+    fn backup_size_errors_localize_only_safe_numeric_and_schema_details() {
+        let (_dir, api) = instance();
+        for language in [crate::i18n::Language::De, crate::i18n::Language::En] {
+            let error = anyhow::Error::new(crate::archive::SizeLimit {
+                phase: "collection",
+                table: Some("events"),
+                bytes: 129 * 1024 * 1024,
+                limit: crate::archive::MAX_PLAIN,
+            })
+            .context(BoundaryError("backup_too_large"))
+            .context("private-record-content-must-not-leave");
+            let response = api.response(Err(error), language);
+            assert_eq!(response["code"], "backup_too_large");
+            assert_eq!(response["backup_size"]["table"], "events");
+            assert_eq!(response["backup_size"]["bytes"], 129 * 1024 * 1024);
+            let message = response["error"].as_str().unwrap();
+            assert!(message.contains("129.00") && message.contains("128.00"));
+            assert!(message.contains(if language == crate::i18n::Language::De {
+                "Tabelle beim Abbruch: events"
+            } else {
+                "table at rejection: events"
+            }));
+            assert!(!response.to_string().contains("private-record-content"));
+        }
+        let response = api.response(
+            Err(anyhow::anyhow!("private-record-content-must-not-leave")),
+            crate::i18n::Language::De,
+        );
+        assert!(response.get("backup_size").is_none());
+        assert!(!response.to_string().contains("private-record-content"));
     }
     #[tokio::test]
     async fn english_dashboard_defaults_keep_authorization_and_existing_settings() {

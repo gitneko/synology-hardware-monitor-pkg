@@ -90,7 +90,7 @@ The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds i
 
 Output in `dist/current/`:
 
-- `HardwareMonitor-0.8.0-0040-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
+- `HardwareMonitor-0.8.0-0041-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
 - `latest-assets/`: fixed-name copies `HardwareMonitor-dsm7-x86_64.spk`, `build-manifest.json` and `SHA256SUMS`, ready for release upload.
 
 The JSON manifest records the source commit (when available), package hashes, version and archive timestamp. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
@@ -99,7 +99,7 @@ The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py
 
 ```sh
 python3 tools/build_spk.py --profile dsm7 --arch x86_64 --binary target/x86_64-unknown-linux-musl/release/hardware-monitor
-python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0040-x86_64-dsm7-development.spk
+python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0041-x86_64-dsm7-development.spk
 ```
 
 Do not package a binary dynamically linked against the development host's glibc. The assembler rejects dynamic/wrong-CPU executables. Never enable `target-cpu=native` or platform-specific CPU flags for this shared package. The musl compiler and bundled C code use the same baseline. Runtime CPU detection in dependencies is distinct from requiring a newer CPU at startup. See [Architecture family decision](PACKAGE-ARCHITECTURES.md).

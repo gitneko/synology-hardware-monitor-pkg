@@ -353,6 +353,7 @@
   "Das Sicherungspasswort muss mindestens 12 Zeichen und höchstens 1024 UTF-8-Bytes lang sein.": "The backup password must contain at least 12 characters and at most 1024 UTF-8 bytes.",
   "Eine Sicherungsaktion läuft bereits. Bitte kurz warten.": "Another backup operation is running. Please wait.",
   "Sicherungsdatei oder Passwort ungültig. Es wurden keine Daten geändert.": "Invalid backup file or password. No data was changed.",
+  "Sicherungsinhalt: mindestens {0} MiB ({1} Byte); Grenze: {2} MiB; Tabelle beim Abbruch: {3}.": "Backup content: at least {0} MiB ({1} bytes); limit: {2} MiB; table at rejection: {3}.",
   "Die Sicherung überschreitet das derzeitige Limit von 128 MiB Nutzdaten / 192 MiB Datei.": "The backup exceeds the current limit of 128 MiB of content / 192 MiB per file.",
   "Seit der Prüfung wurden Einstellungen geändert. Bitte die Sicherung erneut prüfen.": "Settings have changed since inspection. Please inspect the backup again.",
   "Wiederherstellung abgewiesen. Datei, Datenformat und zwischenzeitliche Änderungen prüfen; der bisherige Datenbestand bleibt erhalten.": "Restore rejected. Check the file, data format and intervening changes; existing data has been preserved.",

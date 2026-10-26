@@ -12,13 +12,67 @@ use rusqlite::{
     types::{Value, ValueRef},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, num::NonZeroU32};
+use std::{collections::BTreeMap, io::Write, num::NonZeroU32};
 use zeroize::{Zeroize, Zeroizing};
 // Archives are held in memory; keep a finite bound while allowing retained history.
 pub const MAX_PLAIN: usize = 128 * 1024 * 1024;
 pub const MAX_FILE: usize = 192 * 1024 * 1024;
 const HEADER: &[u8] = b"HWMON-BACKUP-1\n";
 const ITERATIONS: u32 = 600_000;
+
+/// Safe export diagnostics: only byte counts and a fixed schema table name.
+#[derive(Debug, Serialize)]
+pub struct SizeLimit {
+    pub phase: &'static str,
+    pub table: Option<&'static str>,
+    pub bytes: usize,
+    pub limit: usize,
+}
+impl std::fmt::Display for SizeLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("backup export size limit")
+    }
+}
+impl std::error::Error for SizeLimit {}
+impl SizeLimit {
+    fn check(
+        bytes: usize,
+        limit: usize,
+        phase: &'static str,
+        table: Option<&'static str>,
+    ) -> Result<()> {
+        if bytes > limit {
+            return Err(anyhow::Error::new(Self {
+                phase,
+                table,
+                bytes,
+                limit,
+            })
+            .context(BoundaryError("backup_too_large")));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct JsonBytes(usize);
+impl Write for JsonBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("JSON size overflow"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn json_bytes(value: &impl Serialize) -> Result<usize> {
+    let mut count = JsonBytes::default();
+    serde_json::to_writer(&mut count, value)?;
+    Ok(count.0)
+}
 const TABLES: &[(&str,&str)]=&[
     ("counters","name,value"),
     ("devices","id,config,secret,last_poll,snapshot,logs_initialized,revision"),
@@ -89,8 +143,9 @@ fn key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     Ok(output)
 }
 pub fn encrypt(archive: &Archive, password: &str) -> Result<String> {
+    // Count without allocating another full plaintext buffer on a rejected export.
+    SizeLimit::check(json_bytes(archive)?, MAX_PLAIN, "serialization", None)?;
     let plain = Zeroizing::new(serde_json::to_vec(archive)?);
-    anyhow::ensure!(plain.len() <= MAX_PLAIN, BoundaryError("backup_too_large"));
     let mut salt = [0u8; 16];
     let mut nonce = [0u8; 12];
     rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -187,11 +242,23 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
 }
 impl Store {
     pub fn make_archive(&self, vault: &Vault) -> Result<Archive> {
+        self.make_archive_with_limit(vault, MAX_PLAIN)
+    }
+    fn make_archive_with_limit(&self, vault: &Vault, limit: usize) -> Result<Archive> {
         let tx = self.0.unchecked_transaction()?;
-        let mut tables = BTreeMap::new();
-        let mut size = 0usize;
+        let mut archive = Archive {
+            format: 4,
+            version: env!("CARGO_PKG_VERSION").into(),
+            created: crate::now(),
+            tables: BTreeMap::new(),
+        };
+        let mut size = json_bytes(&archive)?;
+        SizeLimit::check(size, limit, "collection", None)?;
         // Caller holds the store mutex, so no application writer can interleave.
         for (table, columns) in TABLES {
+            // JSON object key, colon, array brackets, and the table separator.
+            size += json_bytes(table)? + 3 + usize::from(!archive.tables.is_empty());
+            SizeLimit::check(size, limit, "collection", Some(table))?;
             let mut q = tx.prepare(&format!("SELECT {columns} FROM {table}"))?;
             let mut query = q.query([])?;
             let mut rows = Vec::new();
@@ -205,11 +272,6 @@ impl Store {
                         ValueRef::Blob(b) => Cell::Blob(STANDARD.encode(b)),
                         _ => anyhow::bail!("unsupported stored type"),
                     };
-                    size += match &value {
-                        Cell::Text(s) | Cell::Blob(s) => s.len() + 40,
-                        _ => 40,
-                    };
-                    anyhow::ensure!(size <= MAX_PLAIN, BoundaryError("backup_too_large"));
                     cells.push(value);
                 }
                 if *table == "devices" || *table == "mail_settings" {
@@ -245,17 +307,17 @@ impl Store {
                         }
                     }
                 }
+                // Count the actual JSON after credential/certificate conversion,
+                // including escaping, types, nulls, and row separators.
+                size += json_bytes(&cells)? + usize::from(!rows.is_empty());
+                SizeLimit::check(size, limit, "collection", Some(table))?;
                 rows.push(cells);
             }
-            tables.insert((*table).into(), rows);
+            archive.tables.insert((*table).into(), rows);
         }
         tx.commit()?;
-        Ok(Archive {
-            format: 4,
-            version: env!("CARGO_PKG_VERSION").into(),
-            created: crate::now(),
-            tables,
-        })
+        debug_assert_eq!(size, json_bytes(&archive)?);
+        Ok(archive)
     }
     pub fn audit_cursor(&self) -> Result<i64> {
         Ok(self
@@ -554,6 +616,46 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exact_json_budget_accepts_rows_rejected_by_the_old_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::open(&dir.path().join("master.key")).unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        for id in 1..=100 {
+            store.0.execute(
+                "INSERT INTO events(id,device,key,kind,health,message,created) VALUES(?1,'removed','drive','alarm','\"critical\"',?2,100)",
+                params![id, "Quotes: \"; slash: \\; newline: \n; Unicode: 🦊"],
+            ).unwrap();
+        }
+        let archive = store.make_archive(&vault).unwrap();
+        let actual = serde_json::to_vec(&archive).unwrap().len();
+        assert_eq!(json_bytes(&archive).unwrap(), actual);
+        let old_estimate: usize = archive
+            .tables
+            .values()
+            .flatten()
+            .flatten()
+            .map(|cell| {
+                40 + match cell {
+                    Cell::Text(s) | Cell::Blob(s) => s.len(),
+                    _ => 0,
+                }
+            })
+            .sum();
+        assert!(old_estimate > actual);
+        let exact = store.make_archive_with_limit(&vault, actual).unwrap();
+        assert_eq!(json_bytes(&exact).unwrap(), actual);
+        let error = store
+            .make_archive_with_limit(&vault, actual - 1)
+            .err()
+            .unwrap();
+        assert_eq!(crate::dsm::error_code(&error), "backup_too_large");
+        let size = error.downcast_ref::<SizeLimit>().unwrap();
+        assert!(size.bytes > size.limit);
+        assert!(TABLES.iter().any(|(table, _)| Some(*table) == size.table));
+        assert_eq!(size.phase, "collection");
+    }
+
     #[test]
     fn large_retained_history_exports_and_restores_above_previous_limits() {
         let source = tempfile::tempdir().unwrap();
