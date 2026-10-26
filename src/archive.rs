@@ -73,8 +73,9 @@ fn json_bytes(value: &impl Serialize) -> Result<usize> {
     serde_json::to_writer(&mut count, value)?;
     Ok(count.0)
 }
-const TABLES: &[(&str,&str)]=&[
+pub(crate) const TABLES: &[(&str,&str)]=&[
     ("counters","name,value"),
+    ("history_settings","id,config,revision"),
     ("devices","id,config,secret,last_poll,snapshot,logs_initialized,revision"),
     ("alarm_state","device,key,health,label,observed,emitted"),
     ("alarm_control","device,key,token,acknowledged,actor,acknowledged_at,reason,signature,reannounce"),
@@ -90,7 +91,7 @@ const TABLES: &[(&str,&str)]=&[
 ];
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", deny_unknown_fields)]
-enum Cell {
+pub(crate) enum Cell {
     Null,
     Integer(i64),
     Text(String),
@@ -105,7 +106,7 @@ impl Drop for Cell {
     }
 }
 impl Cell {
-    fn sql(&self) -> Result<Value> {
+    pub(crate) fn sql(&self) -> Result<Value> {
         Ok(match self {
             Self::Null => Value::Null,
             Self::Integer(n) => Value::Integer(*n),
@@ -127,7 +128,7 @@ impl Archive {
         serde_json::json!({"version":self.version,"created":self.created,"devices":self.tables["devices"].len(),"events":self.tables["events"].len(),"alarms":self.tables["alarm_state"].len()})
     }
 }
-fn key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+pub(crate) fn key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     anyhow::ensure!(
         password.chars().count() >= 12 && password.len() <= 1024,
         BoundaryError("backup_password_invalid")
@@ -203,7 +204,7 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
         }
         if archive.format == 2 {
             anyhow::ensure!(
-                archive.tables.len() == TABLES.len() - 2
+                archive.tables.len() == TABLES.len() - 3
                     && !archive.tables.contains_key("alarm_control"),
                 "legacy tables"
             );
@@ -212,15 +213,33 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
         }
         if archive.format == 3 {
             anyhow::ensure!(
-                archive.tables.len() == TABLES.len() - 1
+                archive.tables.len() == TABLES.len() - 2
                     && !archive.tables.contains_key("mail_replay"),
                 "legacy replay table"
             );
             archive.tables.insert("mail_replay".into(), Vec::new());
             archive.format = 4;
         }
+        if archive.format == 4 {
+            anyhow::ensure!(
+                archive.tables.len() == TABLES.len() - 1
+                    && !archive.tables.contains_key("history_settings"),
+                "legacy history tables"
+            );
+            archive.tables.insert(
+                "history_settings".into(),
+                vec![vec![
+                    Cell::Integer(1),
+                    Cell::Text(serde_json::to_string(
+                        &crate::retention::Settings::default(),
+                    )?),
+                    Cell::Integer(0),
+                ]],
+            );
+            archive.format = 6;
+        }
         anyhow::ensure!(
-            archive.format == 4 && archive.tables.len() == TABLES.len(),
+            archive.format == 6 && archive.tables.len() == TABLES.len(),
             "version/tables"
         );
         for (table, columns) in TABLES {
@@ -247,7 +266,7 @@ impl Store {
     fn make_archive_with_limit(&self, vault: &Vault, limit: usize) -> Result<Archive> {
         let tx = self.0.unchecked_transaction()?;
         let mut archive = Archive {
-            format: 4,
+            format: 6,
             version: env!("CARGO_PKG_VERSION").into(),
             created: crate::now(),
             tables: BTreeMap::new(),
@@ -333,6 +352,31 @@ impl Store {
         actor: &str,
         expected_audit: i64,
     ) -> Result<()> {
+        self.restore_rows(RestoreRows::Memory(archive), vault, actor, expected_audit)
+    }
+    pub(crate) fn restore_staged(
+        &mut self,
+        source: &rusqlite::Connection,
+        vault: &Vault,
+        actor: &str,
+        expected_audit: i64,
+        control: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.restore_rows(
+            RestoreRows::Database(source, control),
+            vault,
+            actor,
+            expected_audit,
+        )
+    }
+    fn restore_rows(
+        &mut self,
+        mut source: RestoreRows<'_>,
+        vault: &Vault,
+        actor: &str,
+        expected_audit: i64,
+    ) -> Result<()> {
+        let history_revision = self.retention_settings()?.1;
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -368,9 +412,11 @@ impl Store {
             "mail_settings",
             "notification_settings",
             "counters",
+            "history_settings",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
+        let sealed = matches!(source, RestoreRows::Database(..));
         for (table, columns) in TABLES {
             let marks = vec!["?"; columns.split(',').count()].join(",");
             let sql = if *table == "audit_log" {
@@ -379,9 +425,8 @@ impl Store {
                 format!("INSERT INTO {table}({columns}) VALUES({marks})")
             };
             let mut statement = tx.prepare(&sql)?;
-            for row in &archive.tables[*table] {
-                let mut values = row.iter().map(Cell::sql).collect::<Result<Vec<_>>>()?;
-                if *table == "devices" || *table == "mail_settings" {
+            source.visit(table, columns, &mut |mut values| {
+                if !sealed && (*table == "devices" || *table == "mail_settings") {
                     let id = if *table == "devices" {
                         match &values[0] {
                             Value::Text(s) => s.as_str(),
@@ -405,7 +450,8 @@ impl Store {
                 } else {
                     statement.execute(rusqlite::params_from_iter(values))?;
                 }
-            }
+                Ok(())
+            })?;
         }
         // Imported acknowledgements require an explicit operator review on this installation.
         // Preserve attribution/reason, but never activate old suppression automatically.
@@ -476,35 +522,48 @@ impl Store {
                 );
             }
         }
-        // Validate imported application records inside the transaction before committing.
-        let mut devices = Vec::new();
         {
-            let mut q = tx.prepare("SELECT id,config,secret,revision FROM devices")?;
-            for row in q.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })? {
-                let (id, raw, secret, old_revision) = row?;
-                let mut d: crate::model::Device = serde_json::from_str(&raw)?;
-                d.validate()?;
-                anyhow::ensure!(
-                    d.id == id && d.ca_file.is_none() && old_revision >= 0,
-                    "invalid restored device"
-                );
-                let plain = vault.unseal(&d.id, &secret)?;
-                anyhow::ensure!(
-                    !plain.is_empty() && plain.len() <= 4096 && std::str::from_utf8(&plain).is_ok(),
-                    "device secret"
-                );
-                d.enabled = false;
-                devices.push((d, old_revision));
-            }
+            let (id, raw, rev): (i64, String, i64) =
+                tx.query_row("SELECT id,config,revision FROM history_settings", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+            anyhow::ensure!(id == 1 && rev >= 0, "history settings");
+            serde_json::from_str::<crate::retention::Settings>(&raw)?.validate()?;
+            // Invalidate editors opened before the restore, including a revision-0 draft.
+            tx.execute(
+                "UPDATE history_settings SET revision=max(revision,?1)+1",
+                [history_revision],
+            )?;
         }
-        for (d, old_revision) in devices {
+        // Restores get the same review window as a fresh installation/upgrade.
+        tx.execute("INSERT INTO counters(name,value) VALUES('history_cleanup_due',?1) ON CONFLICT(name) DO UPDATE SET value=excluded.value",[crate::now()+86400])?;
+        // Validate imported application records inside the transaction before committing.
+        let mut device_cursor: Option<String> = None;
+        loop {
+            use rusqlite::OptionalExtension;
+            let row: Option<(String, String, Vec<u8>, i64)> = tx
+                .query_row(
+                    "SELECT id,config,secret,revision FROM devices WHERE ?1 IS NULL OR id>?1 ORDER BY id LIMIT 1",
+                    [&device_cursor],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()?;
+            let Some((id, raw, secret, old_revision)) = row else {
+                break;
+            };
+            device_cursor = Some(id.clone());
+            let mut d: crate::model::Device = serde_json::from_str(&raw)?;
+            d.validate()?;
+            anyhow::ensure!(
+                d.id == id && d.ca_file.is_none() && old_revision >= 0,
+                "invalid restored device"
+            );
+            let plain = vault.unseal(&d.id, &secret)?;
+            anyhow::ensure!(
+                !plain.is_empty() && plain.len() <= 4096 && std::str::from_utf8(&plain).is_ok(),
+                "device secret"
+            );
+            d.enabled = false;
             let next = revision
                 .max(old_revision)
                 .checked_add(1)
@@ -608,7 +667,45 @@ impl Store {
             [],
         )?;
         tx.execute("INSERT INTO audit_log(actor,action,device,outcome,created) VALUES(?1,'backup.restore','application','Erfolgreich; Überwachung und Versand pausiert',?2)",params![actor,crate::now()])?;
+        if let RestoreRows::Database(_, control) = source {
+            control()?;
+        }
         tx.commit()?;
+        Ok(())
+    }
+}
+
+enum RestoreRows<'a> {
+    Memory(&'a Archive),
+    Database(&'a rusqlite::Connection, &'a mut dyn FnMut() -> Result<()>),
+}
+impl RestoreRows<'_> {
+    fn visit(
+        &mut self,
+        table: &str,
+        columns: &str,
+        callback: &mut dyn FnMut(Vec<Value>) -> Result<()>,
+    ) -> Result<()> {
+        match self {
+            Self::Memory(archive) => {
+                let rows = archive.tables.get(table).context("archive table missing")?;
+                for row in rows {
+                    callback(row.iter().map(Cell::sql).collect::<Result<Vec<_>>>()?)?;
+                }
+            }
+            Self::Database(conn, control) => {
+                let mut q = conn.prepare(&format!("SELECT {columns} FROM {table}"))?;
+                let mut rows = q.query([])?;
+                while let Some(row) = rows.next()? {
+                    let mut values = Vec::new();
+                    for i in 0..columns.split(',').count() {
+                        values.push(row.get::<_, Value>(i)?);
+                    }
+                    control()?;
+                    callback(values)?;
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -724,7 +821,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, 6);
         let mut t = Store::open(target.path()).unwrap();
         t.restore_archive(&decoded, &v2, "target-admin", 0).unwrap();
         assert!(t.pending_mail_replay(crate::now()).unwrap().is_none());
@@ -735,6 +832,7 @@ mod tests {
             .any(|j| j["state"] == "submitted" && j["message_id"] == job.message_id));
         assert!(history.iter().any(|j| j["state"] == "cancelled"));
         let mut old = archive;
+        old.tables.remove("history_settings");
         old.format = 3;
         old.tables.remove("mail_replay");
         let decoded = decrypt(
@@ -742,7 +840,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, 6);
         assert!(decoded.tables["mail_replay"].is_empty());
     }
     #[test]
@@ -801,6 +899,7 @@ mod tests {
         assert_eq!(status["acknowledgement"]["reason"], "Known damaged input");
         assert_ne!(status["token"], token);
         let mut legacy = s.make_archive(&v1).unwrap();
+        legacy.tables.remove("history_settings");
         legacy.format = 2;
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
@@ -809,7 +908,7 @@ mod tests {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, 6);
         assert!(decoded.tables["alarm_control"].is_empty());
         let cursor = t.audit_cursor().unwrap();
         t.restore_archive(&decoded, &v2, "target-admin", cursor)
@@ -830,6 +929,7 @@ mod tests {
     }
     fn device() -> crate::model::Device {
         crate::model::Device {
+            hardware_log: Default::default(),
             id: "backup-test".into(),
             name: "Backup-Test".into(),
             endpoint: "https://bmc.example/".into(),
@@ -900,6 +1000,7 @@ mod tests {
         corrupt[last] ^= 1;
         assert!(decrypt(&STANDARD.encode(corrupt), "a sufficiently long password").is_err());
         let mut legacy = decrypt(&file, "a sufficiently long password").unwrap();
+        legacy.tables.remove("history_settings");
         legacy.format = 1;
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
@@ -917,7 +1018,7 @@ mod tests {
         }
         let old_file = encrypt(&legacy, "a sufficiently long password").unwrap();
         let decoded = decrypt(&old_file, "a sufficiently long password").unwrap();
-        assert_eq!(decoded.format, 4);
+        assert_eq!(decoded.format, 6);
         assert!(matches!(
             decoded.tables["events"][0].last(),
             Some(Cell::Null)

@@ -16,6 +16,6 @@ No `TEST` marker or other replay label is added to the subject or body. Every in
 
 SMTP acceptance does not establish delivery or parsing in the alarm server. As with ordinary SMTP, a connection loss after acceptance can leave an ambiguous result; stable Message-IDs assist deduplication but do not guarantee exactly-once delivery. Permanent rejections stop retries; transient errors use the existing bounded backoff (at most eight attempts).
 
-The dialog shows the latest 50 manual submissions for its event. Clearing the event log removes associated manual history and pending jobs together with the original events; the audit log remains. Encrypted archive format 4 includes manual history, but restore cancels pending jobs and discards drafts rather than resuming them. Saving automatic notification filters or acknowledging a hardware fault does not cancel separately requested manual jobs.
+The dialog shows the latest 50 manual submissions for its event. Clearing the event log removes associated manual history and pending jobs together with the original events; the audit log remains. Manual history was added in encrypted archive format 4 and is included in current format 6; restore cancels pending jobs and discards drafts rather than resuming them. Saving automatic notification filters or acknowledging a hardware fault does not cancel separately requested manual jobs.
 
 The UI groups some equivalent raw event representations. The replay dialog displays the exact original event ID used for the email; it does not send every grouped representation.

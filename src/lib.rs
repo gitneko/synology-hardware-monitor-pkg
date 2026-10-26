@@ -24,8 +24,12 @@ pub mod notification;
 
 pub mod correlation;
 
+mod api_jobs;
 pub mod archive;
 pub mod history;
+pub mod jobs;
+pub mod retention;
+pub mod stream_archive;
 
 pub mod i18n;
 

@@ -48,6 +48,9 @@ pub fn poll_failure_label(error: &anyhow::Error) -> String {
 
 pub fn failure_description(reason: &str) -> &'static str {
     match reason {
+        "log_selection_unsupported" => {
+            "Chronologische Hardwarelog-Auswahl vom Controller nicht unterstützt"
+        }
         "deadline" => "Zeitlimit der vollständigen Abfrage erreicht",
         "resource_limit" => "Ressourcenlimit der Abfrage erreicht",
         "byte_limit" => "Datenmengenlimit der Abfrage erreicht",
@@ -162,6 +165,7 @@ pub struct Redfish {
     origin: Url,
     deadline: Duration,
     session: std::sync::Mutex<Option<Session>>,
+    hardware_log: HardwareLogRead,
 }
 
 struct Session {
@@ -250,6 +254,7 @@ impl Redfish {
             origin,
             deadline: Duration::from_secs(device.poll_timeout_seconds()),
             session: std::sync::Mutex::new(None),
+            hardware_log: device.hardware_log.clone(),
         })
     }
 
@@ -298,6 +303,22 @@ impl Redfish {
             });
         }
         let mut result = progress.snapshot;
+        if let HardwareLogRead::Latest { limit } = self.hardware_log {
+            // Merge the newest candidates from each advertised log service.
+            result.logs.sort_by(|a, b| {
+                b.created
+                    .as_deref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .cmp(
+                        &a.created
+                            .as_deref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()),
+                    )
+                    .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+            });
+            result.logs.dedup_by(|a, b| a.fingerprint == b.fingerprint);
+            result.logs.truncate(limit as usize);
+        }
         let mut observations = progress.observations;
         result.resource_aliases = progress.identities.merge(&mut observations);
         result.assessment_exclusions = progress.applicability.exclusions(&observations);
@@ -613,9 +634,25 @@ impl Redfish {
         let result = &mut progress.snapshot;
         let observations = &mut progress.observations;
         let mut total_bytes = 0usize;
+        let mut ordered = HashSet::new();
+        let mut selected = std::collections::BTreeMap::<String, usize>::new();
         while let Some(path) = queue.pop_front().or_else(|| log_queue.pop_front()) {
-            let url = safe_link(&self.origin, &path)
+            if self.hardware_log == HardwareLogRead::Disabled && log_resource(&path) {
+                result.logs_complete = false;
+                continue;
+            }
+            let mut url = safe_link(&self.origin, &path)
                 .map_err(|_| anyhow::anyhow!(PollFailure::new("Redfish-Verweis", "unsafe_link")))?;
+            if let HardwareLogRead::Latest { limit } = self.hardware_log {
+                if url.path().trim_end_matches('/').ends_with("/Entries")
+                    && !ordered.contains(url.path())
+                {
+                    url.query_pairs_mut()
+                        .append_pair("$orderby", "Created desc")
+                        .append_pair("$top", &limit.to_string());
+                    ordered.insert(url.path().to_owned());
+                }
+            }
             progress.current = url.path().to_owned();
             if !visited.insert(url.to_string()) {
                 continue;
@@ -709,6 +746,55 @@ impl Redfish {
                     continue;
                 }
             };
+            if let HardwareLogRead::Latest { limit } = self.hardware_log {
+                if log_entry_collection(&path, &value) {
+                    let mut url = safe_link(&self.origin, &path)?;
+                    let collection = url.path().to_owned();
+                    if !ordered.contains(&collection) {
+                        url.query_pairs_mut()
+                            .append_pair("$orderby", "Created desc")
+                            .append_pair("$top", &limit.to_string());
+                        ordered.insert(collection);
+                        log_queue.push_front(url.to_string());
+                        continue;
+                    }
+                    let members = value["Members"].as_array().unwrap();
+                    let times = members
+                        .iter()
+                        .map(|m| {
+                            m.get("Created")
+                                .and_then(Value::as_str)
+                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        })
+                        .collect::<Vec<_>>();
+                    if times
+                        .windows(2)
+                        .any(|w| matches!((&w[0],&w[1]),(Some(a),Some(b)) if a<b))
+                    {
+                        result.logs_complete = false;
+                        result.capabilities.push(Capability {
+                            uri: path.clone(),
+                            outcome: "log_selection_unsupported".into(),
+                            http_status: None,
+                            attempts: 1,
+                        });
+                        continue;
+                    }
+                    let count = selected.entry(collection).or_default();
+                    // Reject ignored $top instead of claiming that an arbitrary first page is newest.
+                    if *count + members.len() > limit as usize {
+                        result.logs_complete = false;
+                        result.capabilities.push(Capability {
+                            uri: path.clone(),
+                            outcome: "log_selection_unsupported".into(),
+                            http_status: None,
+                            attempts: 1,
+                        });
+                        continue;
+                    }
+                    *count += members.len();
+                }
+            }
             let mut resource_observations = BTreeMap::new();
             let mut resource_logs = Vec::new();
             normalize(
@@ -717,6 +803,21 @@ impl Redfish {
                 &mut resource_observations,
                 &mut resource_logs,
             );
+            let mut selection_valid = true;
+            if matches!(self.hardware_log, HardwareLogRead::Latest { .. }) {
+                resource_logs.retain(|log| {
+                    let valid = log
+                        .created
+                        .as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .is_some();
+                    selection_valid &= valid;
+                    valid
+                });
+                if !selection_valid {
+                    result.logs_complete = false;
+                }
+            }
             anyhow::ensure!(
                 observations.len() + resource_observations.len() <= 4096
                     && result.logs.len() + resource_logs.len() <= 4096,
@@ -726,8 +827,17 @@ impl Redfish {
             result.logs.extend(resource_logs);
             result.capabilities.push(Capability {
                 uri: path.clone(),
-                outcome: "available".into(),
-                http_status: Some(status.as_u16()),
+                outcome: if selection_valid {
+                    "available"
+                } else {
+                    "log_selection_unsupported"
+                }
+                .into(),
+                http_status: if selection_valid {
+                    Some(status.as_u16())
+                } else {
+                    None
+                },
                 attempts,
             });
             progress.root_received = true;
@@ -749,9 +859,39 @@ impl Redfish {
             progress.applicability.observe(&path, &value);
             crate::correlation::observe(&path, &value, &mut result.resources);
             enqueue_resources(&path, &value, &mut queue, &mut log_queue);
+            if let HardwareLogRead::Latest { limit } = self.hardware_log {
+                let collection = safe_link(&self.origin, &path)?.path().to_owned();
+                if selected
+                    .get(&collection)
+                    .is_some_and(|n| *n >= limit as usize)
+                {
+                    log_queue.retain(|link| {
+                        safe_link(&self.origin, link).is_ok_and(|url| url.path() != collection)
+                    });
+                }
+            }
         }
         Ok(())
     }
+}
+
+fn log_entry_collection(path: &str, value: &Value) -> bool {
+    value.get("Members").is_some_and(Value::is_array)
+        && (value["@odata.type"]
+            .as_str()
+            .is_some_and(|s| s.contains("LogEntryCollection"))
+            || path
+                .split('?')
+                .next()
+                .unwrap_or(path)
+                .trim_end_matches('/')
+                .ends_with("/Entries")
+            || (log_resource(path)
+                && value["Members"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m.get("Message").is_some() || m.get("EntryType").is_some())))
 }
 
 fn log_resource(path: &str) -> bool {

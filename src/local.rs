@@ -4,7 +4,7 @@ use crate::{
     dsm::AuthContext,
 };
 use anyhow::{Context, Result};
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{combinators::BoxBody, BodyExt, Full, Limited};
 use hyper::{
     body::{Bytes, Incoming},
     header,
@@ -61,7 +61,7 @@ pub async fn serve(config: Config, api: Arc<Api>) -> Result<()> {
                             Err(_) => json_response(StatusCode::BAD_REQUEST, json!({"ok":false,"code":"local_request_invalid","error":"Invalid local development request"})),
                         }) }
                     });
-                    let _ = tokio::time::timeout(Duration::from_secs(120), hyper::server::conn::http1::Builder::new()
+                    let _ = tokio::time::timeout(Duration::from_secs(86400), hyper::server::conn::http1::Builder::new()
                         .max_buf_size(32768).serve_connection(TokioIo::new(stream), service)).await;
                 });
             }
@@ -70,7 +70,7 @@ pub async fn serve(config: Config, api: Arc<Api>) -> Result<()> {
     }
 }
 
-type Reply = Response<Full<Bytes>>;
+type Reply = Response<BoxBody<Bytes, std::io::Error>>;
 fn reply(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Reply {
     Response::builder()
         .status(status)
@@ -79,7 +79,11 @@ fn reply(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Repl
         .header("X-Content-Type-Options", "nosniff")
         .header("Content-Security-Policy", "frame-ancestors 'none'")
         .header("Cross-Origin-Resource-Policy", "same-origin")
-        .body(Full::new(body.into()))
+        .body(
+            Full::new(body.into())
+                .map_err(|never| match never {})
+                .boxed(),
+        )
         .unwrap()
 }
 fn json_response(status: StatusCode, value: Value) -> Reply {
@@ -116,8 +120,14 @@ async fn route(request: hyper::Request<Incoming>, config: &Config, api: &Api) ->
         let locale = crate::i18n::Language::header(header("x-hardwaremonitor-language"));
         let method = request.method().clone();
         let diagnostic = request.uri().query() == Some("diagnose=1");
-        let (operation, csrf) = if method == Method::GET {
-            (Operation::Dashboard, None)
+        let (operation, csrf) = if method == Method::GET || method == Method::HEAD {
+            if let Some((id, _)) = crate::dsm::download_query(request.uri().query().unwrap_or(""))?
+            {
+                (Operation::BackupDownload { id }, None)
+            } else {
+                anyhow::ensure!(method == Method::GET, "HEAD requires a download");
+                (Operation::Dashboard, None)
+            }
         } else if method == Method::POST {
             anyhow::ensure!(
                 header("content-type")
@@ -145,7 +155,9 @@ async fn route(request: hyper::Request<Incoming>, config: &Config, api: &Api) ->
                 bytes.len() <= 128 * 1024
                     || matches!(
                         body.operation,
-                        Operation::BackupInspect { .. } | Operation::BackupRestore { .. }
+                        Operation::BackupInspect { .. }
+                            | Operation::BackupRestore { .. }
+                            | Operation::BackupUploadPart { .. }
                     ),
                 "request too large"
             );
@@ -169,6 +181,30 @@ async fn route(request: hyper::Request<Incoming>, config: &Config, api: &Api) ->
                 csrf,
             })
             .await;
+        if let Some(id) = result
+            .get("download")
+            .and_then(Value::as_str)
+            .filter(|_| result["ok"] == true)
+        {
+            let (file, length, cancel) = api.jobs.open_download(id)?;
+            return Ok(Response::builder()
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_LENGTH, length)
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=HardwareMonitor-backup.hmbackup",
+                )
+                .header(header::CACHE_CONTROL, "no-store")
+                .header("Referrer-Policy", "no-referrer")
+                .body(
+                    FileBody {
+                        file,
+                        remaining: if method == Method::HEAD { 0 } else { length },
+                        cancel,
+                    }
+                    .boxed(),
+                )?);
+        }
         result["source"] = json!("hardware-monitor");
         result["version"] = json!(env!("CARGO_PKG_VERSION"));
         return Ok(json_response(StatusCode::OK, result));
@@ -232,4 +268,79 @@ async fn route(request: hyper::Request<Incoming>, config: &Config, api: &Api) ->
         (mime, std::fs::read(file)?)
     };
     Ok(reply(StatusCode::OK, content_type, body))
+}
+
+struct FileBody {
+    file: std::fs::File,
+    remaining: u64,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+impl hyper::body::Body for FileBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, std::io::Error>>> {
+        use std::io::Read;
+        if self.remaining == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("download cancelled"))));
+        }
+        let mut buffer = vec![0; self.remaining.min(65536) as usize];
+        match self.file.read(&mut buffer) {
+            Ok(0) => std::task::Poll::Ready(Some(Err(std::io::ErrorKind::UnexpectedEof.into()))),
+            Ok(n) => {
+                self.remaining -= n as u64;
+                buffer.truncate(n);
+                std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(buffer)))))
+            }
+            Err(e) => std::task::Poll::Ready(Some(Err(e))),
+        }
+    }
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(self.remaining)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn download_body_is_bounded_detects_truncation_and_obeys_cancellation() {
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &vec![42; 150_000]).unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut body = FileBody {
+            file,
+            remaining: 150_000,
+            cancel: cancel.clone(),
+        };
+        let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(first.len(), 65536);
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(body.frame().await.unwrap().is_err());
+        cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+        while body.remaining > 0 {
+            assert!(
+                body.frame()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .into_data()
+                    .unwrap()
+                    .len()
+                    <= 65536
+            );
+        }
+        assert!(body.frame().await.is_none());
+        body.remaining = 1;
+        assert_eq!(
+            body.frame().await.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+    }
 }

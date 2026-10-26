@@ -1,6 +1,7 @@
 import {currentLanguage} from './i18n.js';
 // Read the existing DSM browser session. Never submit credentials, log the
-// response, persist the token or place it in a URL.
+// response or persist the token. API requests use headers; the explicit native
+// backup download has a scoped query-token exception in backup-download.js.
 export async function dsmHeaders(request, signal) {
   if (globalThis.HARDWARE_MONITOR_LOCAL === true) return {'X-HardwareMonitor-Language':currentLanguage()};
   const response = await request('/webman/login.cgi', {

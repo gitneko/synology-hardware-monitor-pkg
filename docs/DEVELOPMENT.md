@@ -90,7 +90,7 @@ The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds i
 
 Output in `dist/current/`:
 
-- `HardwareMonitor-0.8.0-0041-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
+- `HardwareMonitor-0.8.0-0043-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
 - `latest-assets/`: fixed-name copies `HardwareMonitor-dsm7-x86_64.spk`, `build-manifest.json` and `SHA256SUMS`, ready for release upload.
 
 The JSON manifest records the source commit (when available), package hashes, version and archive timestamp. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
@@ -99,7 +99,7 @@ The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py
 
 ```sh
 python3 tools/build_spk.py --profile dsm7 --arch x86_64 --binary target/x86_64-unknown-linux-musl/release/hardware-monitor
-python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0041-x86_64-dsm7-development.spk
+python3 tools/check_spk.py dist/HardwareMonitor-0.8.0-0043-x86_64-dsm7-development.spk
 ```
 
 Do not package a binary dynamically linked against the development host's glibc. The assembler rejects dynamic/wrong-CPU executables. Never enable `target-cpu=native` or platform-specific CPU flags for this shared package. The musl compiler and bundled C code use the same baseline. Runtime CPU detection in dependencies is distinct from requiring a newer CPU at startup. See [Architecture family decision](PACKAGE-ARCHITECTURES.md).
@@ -123,3 +123,14 @@ After pushing this project to GitHub, enable Actions and allow the workflow toke
 `python3 tools/preview_ui.py` serves the production UI with read-only synthetic data at `http://127.0.0.1:18773`. Choose English, capture the device and event views, and save images in `docs/images/`. This screenshot-only server denies writes and never runs as part of an SPK. It does not establish DSM authentication or hardware interoperability. Browser-owned file-picker text follows browser/OS language independently of the app.
 
 The upgrade hook stops the service and creates a private SQLite/master-key snapshot through the CLI. This local backup is not the password-encrypted app download. See [Backup and restore](BACKUP-RESTORE.md). Full rollback behavior, crash restart, resource measurements and directory-service group resolution still require target acceptance.
+
+
+## Large backup regression
+
+The default Rust suite covers staged restore, authentication, corruption/truncation/trailing data, cancellation, actual SQLite disk-full rollback, consistent online snapshots and session-bound job/offset handling. The larger on-disk test is deliberately ignored by default. Run it in release mode on a filesystem with at least 25 GiB free:
+
+```sh
+cargo test --release --locked --lib stream_archive::tests::multi_gib_history_roundtrip_with_bounded_memory -- --ignored --exact --nocapture
+```
+
+It creates 1.8 million synthetic log entries, over 2 GiB of logical records, and verifies complete cross-key restore and paused devices. For a useful peak-RSS measurement, compile with `cargo test --release --locked --lib --no-run`, then invoke the reported unit-test executable directly under `/usr/bin/time -v` with the same `--ignored --exact` selector. Timing Cargo itself would include compiler memory. Compression ratio and runtime depend on the fixture and host; NAS acceptance remains separate.

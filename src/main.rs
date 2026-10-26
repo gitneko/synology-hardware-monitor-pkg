@@ -289,6 +289,9 @@ async fn serve(
     let mut jobs = JoinSet::new();
     let mut delivery = JoinSet::new();
     let mut next_delivery = Instant::now();
+    worker_api.jobs.reap()?;
+    let mut next_reap = Instant::now() + Duration::from_secs(60);
+    let mut next_maintenance = Instant::now() + Duration::from_secs(60);
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     eprintln!("hardware-monitor started; legacy sysnotify delivery enabled={notify}; SMTP/desktop follow saved channel settings");
     loop {
@@ -301,15 +304,27 @@ async fn serve(
             },
             Some(completion)=delivery.join_next(),if !delivery.is_empty()=>{if let Err(e)=completion {eprintln!("notification worker failed: {e}");}},
             _=ticker.tick()=> {
+                if Instant::now()>=next_reap {
+                    next_reap=Instant::now()+Duration::from_secs(60);
+                    let jobs=worker_api.jobs.clone();
+                    tokio::task::spawn_blocking(move || {let _=jobs.reap();});
+                }
+                if Instant::now()>=next_maintenance {
+                    let _=worker_api.automatic_cleanup();
+                    next_maintenance=Instant::now()+Duration::from_secs(60);
+                }
+                if worker_api.jobs.restoring() { continue; }
                 let devices=store.lock().unwrap().versioned_devices()?;
                 for (device,secret,revision) in devices {
                     if jobs.len()>=4 {break;}
                     if !device.enabled || running.contains(&device.id) || due.get(&device.id).is_some_and(|(r,t)|*r==revision && *t>Instant::now()) {continue;}
                     running.insert(device.id.clone());
-                    let vault=vault.clone(); let store=store.clone();
+                    let vault=vault.clone(); let store=store.clone(); let api=worker_api.clone();
                     jobs.spawn(async move {
                         let snapshot=collect(&vault,&device,&secret).await;
+                        if api.jobs.restoring() { return (device.id,revision,device.interval_seconds); }
                         let mut s=store.lock().unwrap();
+                        if api.jobs.restoring() { return (device.id,revision,device.interval_seconds); }
                         let applied=match snapshot {Ok(snapshot)=>s.apply_revision(&device,&snapshot,now(),Some(revision)),Err(error)=>{eprintln!("device {}: {}",device.id,hardware_monitor::collector::poll_failure_label(&error));s.poll_failure_revision(&device,now(),Some(revision),&error)}};
                         if applied.is_err() {eprintln!("device {}: database update failed",device.id);}
                         (device.id,revision,device.interval_seconds)
@@ -334,10 +349,14 @@ async fn serve(
             }
         }
     }
+    worker_api.jobs.shutdown();
     jobs.abort_all();
     delivery.abort_all();
     api.abort();
     while jobs.join_next().await.is_some() {}
+    while worker_api.jobs.busy() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     if !development {
         std::fs::remove_file(&socket)?;
     }
@@ -358,20 +377,87 @@ async fn api_loop(listener: UnixListener, service: Arc<Api>) -> Result<()> {
         tokio::spawn(async move {
             let _permit = permit;
             let operation = async {
-                let length = stream.read_u32().await? as usize;
+                let length = tokio::time::timeout(Duration::from_secs(20), stream.read_u32())
+                    .await?? as usize;
                 anyhow::ensure!(length <= MAX_REQUEST, "request too large");
                 let mut bytes = zeroize::Zeroizing::new(vec![0u8; length]);
-                stream.read_exact(&mut bytes).await?;
+                tokio::time::timeout(Duration::from_secs(20), stream.read_exact(&mut bytes))
+                    .await??;
                 let request: Request = serde_json::from_slice(&bytes)?;
-                let result = service.handle(request).await;
+                let head = request
+                    .auth
+                    .environment
+                    .get("REQUEST_METHOD")
+                    .is_some_and(|method| method == "HEAD");
+                let result =
+                    tokio::time::timeout(Duration::from_secs(20), service.handle(request)).await?;
+                if let Some(id) = result
+                    .get("download")
+                    .and_then(Value::as_str)
+                    .filter(|_| result["ok"] == true)
+                {
+                    let (file, length, cancel) = service.jobs.open_download(id)?;
+                    send_attachment(&mut stream, file, length, cancel, head).await?;
+                    return Ok::<_, anyhow::Error>(());
+                }
                 let response = serde_json::to_vec(&result)?;
                 stream.write_u32(response.len() as u32).await?;
                 stream.write_all(&response).await?;
                 Ok::<_, anyhow::Error>(())
             };
-            let _ = tokio::time::timeout(Duration::from_secs(20), operation).await;
+            let _ = tokio::time::timeout(Duration::from_secs(86400), operation).await;
         });
     }
+}
+
+// The native socket protocol uses a sentinel plus a 64-bit attachment length.
+// HEAD sends the same metadata and never opens a body-transfer loop.
+async fn send_attachment<W: tokio::io::AsyncWrite + Unpin>(
+    output: &mut W,
+    mut file: std::fs::File,
+    length: u64,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    head: bool,
+) -> Result<()> {
+    use std::io::Read;
+    output.write_u32(u32::MAX).await?;
+    output.write_u64(length).await?;
+    if !head {
+        let mut buffer = [0; 65536];
+        loop {
+            anyhow::ensure!(
+                !cancel.load(std::sync::atomic::Ordering::Relaxed),
+                "download cancelled"
+            );
+            let n = file.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            tokio::time::timeout(Duration::from_secs(30), output.write_all(&buffer[..n])).await??;
+        }
+    }
+    Ok(())
+}
+async fn receive_attachment<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(
+    input: &mut R,
+    output: &mut W,
+    length: u64,
+    head: bool,
+) -> Result<()> {
+    output.write_all(format!("Status: 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"HardwareMonitor-backup.hmbackup\"\r\nContent-Length: {length}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\r\n").as_bytes()).await?;
+    if !head {
+        let mut left = length;
+        let mut buffer = [0; 65536];
+        while left > 0 {
+            let n = left.min(buffer.len() as u64) as usize;
+            tokio::time::timeout(Duration::from_secs(30), input.read_exact(&mut buffer[..n]))
+                .await??;
+            output.write_all(&buffer[..n]).await?;
+            left -= n as u64;
+        }
+    }
+    output.flush().await?;
+    Ok(())
 }
 
 async fn cgi(socket: &Path) -> Result<()> {
@@ -379,9 +465,12 @@ async fn cgi(socket: &Path) -> Result<()> {
     let query = std::env::var("QUERY_STRING").unwrap_or_default();
     let probe = method == "GET" && query == "probe=1";
     let diagnostic = method == "GET" && query == "diagnose=1";
+    let parsed_download = dsm::download_query(&query);
+    let is_download = parsed_download.as_ref().is_ok_and(Option::is_some);
+    let mut streamed = false;
     let response = async {
         anyhow::ensure!(
-            matches!(method.as_str(), "GET" | "POST"),
+            matches!(method.as_str(), "GET" | "POST") || (method == "HEAD" && is_download),
             dsm::BoundaryError("method_not_allowed")
         );
         // A liveness marker only: no socket, authentication, identity or device data.
@@ -391,6 +480,10 @@ async fn cgi(socket: &Path) -> Result<()> {
         let mut auth = AuthContext::from_cgi();
         auth.diagnostic = diagnostic;
         auth.validate()?;
+        let parsed_download = parsed_download?;
+        if let Some((_, token)) = &parsed_download {
+            auth.download_token(token.as_deref())?;
+        }
         let (operation, csrf) = if method == "POST" {
             let content_type = std::env::var("CONTENT_TYPE").unwrap_or_default();
             anyhow::ensure!(
@@ -425,11 +518,15 @@ async fn cgi(socket: &Path) -> Result<()> {
                 length <= 128 * 1024
                     || matches!(
                         &body.operation,
-                        Operation::BackupInspect { .. } | Operation::BackupRestore { .. }
+                        Operation::BackupInspect { .. }
+                            | Operation::BackupRestore { .. }
+                            | Operation::BackupUploadPart { .. }
                     ),
                 dsm::BoundaryError("write_body_invalid")
             );
             (body.operation, Some(body.csrf))
+        } else if let Some((id, _)) = parsed_download {
+            (Operation::BackupDownload { id }, None)
         } else {
             (Operation::Dashboard, None)
         };
@@ -456,6 +553,14 @@ async fn cgi(socket: &Path) -> Result<()> {
             .read_u32()
             .await
             .context(dsm::BoundaryError("api_transport_failed"))? as usize;
+        if length == u32::MAX as usize {
+            let remaining = stream.read_u64().await?;
+            anyhow::ensure!(is_download, dsm::BoundaryError("api_response_invalid"));
+            streamed = true;
+            let mut stdout = tokio::io::stdout();
+            receive_attachment(&mut stream, &mut stdout, remaining, method == "HEAD").await?;
+            return Ok(Value::Null);
+        }
         anyhow::ensure!(
             length <= MAX_RESPONSE,
             dsm::BoundaryError("api_response_invalid")
@@ -467,7 +572,12 @@ async fn cgi(socket: &Path) -> Result<()> {
             .context(dsm::BoundaryError("api_transport_failed"))?;
         serde_json::from_slice::<Value>(&bytes).context(dsm::BoundaryError("api_response_invalid"))
     };
-    let mut result = match tokio::time::timeout(Duration::from_secs(25), response).await {
+    let timeout = if is_download && method != "HEAD" {
+        86400
+    } else {
+        25
+    };
+    let mut result = match tokio::time::timeout(Duration::from_secs(timeout), response).await {
         Ok(Ok(v)) => v,
         Ok(Err(error)) => {
             json!({"ok":false,"error":"DSM-Anmeldung prüfen; Monitoring-Dienst muss laufen", "code":dsm::error_code(&error)})
@@ -476,6 +586,9 @@ async fn cgi(socket: &Path) -> Result<()> {
             json!({"ok":false,"error":"Zeitüberschreitung bei der Anmeldung", "code":"api_timeout"})
         }
     };
+    if streamed {
+        return Ok(());
+    }
     // Diagnostics use a 200 transport envelope so nginx error_page cannot hide
     // the fixed failure code. Authorization remains mandatory; no dashboard is
     // returned in this mode, even for an authenticated user.
@@ -497,7 +610,12 @@ async fn cgi(socket: &Path) -> Result<()> {
     } else {
         "403 Forbidden"
     };
-    print!("Status: {status}\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n{}",serde_json::to_string(&result)?);
+    let body = if method == "HEAD" {
+        String::new()
+    } else {
+        serde_json::to_string(&result)?
+    };
+    print!("Status: {status}\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\r\n{body}");
     Ok(())
 }
 
@@ -597,4 +715,64 @@ async fn service(cli: &Cli, action: &str, notify: bool) -> Result<()> {
         _ => unreachable!(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    async fn transferred(mut file: std::fs::File, length: u64, head: bool) -> Vec<u8> {
+        use std::io::Seek;
+        file.rewind().unwrap();
+        let (mut sender, mut receiver) = tokio::io::duplex(8192);
+        let producer = tokio::spawn(async move {
+            send_attachment(
+                &mut sender,
+                file,
+                length,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                head,
+            )
+            .await
+            .unwrap();
+        });
+        assert_eq!(receiver.read_u32().await.unwrap(), u32::MAX);
+        assert_eq!(receiver.read_u64().await.unwrap(), length);
+        let mut response = Vec::new();
+        receive_attachment(&mut receiver, &mut response, length, head)
+            .await
+            .unwrap();
+        producer.await.unwrap();
+        response
+    }
+    #[tokio::test]
+    async fn native_attachment_streams_exact_bytes_and_head_only_returns_large_file_metadata() {
+        use std::io::Write;
+        let data = (0..300_000).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&data).unwrap();
+        let response = transferred(file, data.len() as u64, false).await;
+        let split = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        assert_eq!(&response[split + 4..], data);
+        let headers = std::str::from_utf8(&response[..split]).unwrap();
+        assert!(headers.contains("filename=\"HardwareMonitor-backup.hmbackup\""));
+        assert!(headers.contains("Content-Length: 300000"));
+        let file = tempfile::tempfile().unwrap();
+        let length = 8u64 * 1024 * 1024 * 1024;
+        file.set_len(length).unwrap();
+        let response = transferred(file, length, true).await;
+        let text = String::from_utf8(response).unwrap();
+        assert!(text.contains("Content-Length: 8589934592"));
+        assert!(text.ends_with("\r\n\r\n"));
+        assert!(text.len() < 512);
+    }
+    #[tokio::test]
+    async fn truncated_native_attachment_fails_instead_of_becoming_a_complete_download() {
+        let (mut sender, mut receiver) = tokio::io::duplex(32);
+        sender.write_all(b"abc").await.unwrap();
+        drop(sender);
+        let mut response = Vec::new();
+        assert!(receive_attachment(&mut receiver, &mut response, 4, false)
+            .await
+            .is_err());
+    }
 }

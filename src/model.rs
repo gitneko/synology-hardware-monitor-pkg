@@ -90,6 +90,19 @@ pub struct Device {
     pub pinned_certificate_pem: Option<String>,
     #[serde(default = "enabled_default")]
     pub enabled: bool,
+    #[serde(default)]
+    pub hardware_log: HardwareLogRead,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HardwareLogRead {
+    Disabled,
+    #[default]
+    All,
+    Latest {
+        limit: u32,
+    },
 }
 
 fn enabled_default() -> bool {
@@ -114,6 +127,12 @@ impl Device {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let HardwareLogRead::Latest { limit } = self.hardware_log {
+            anyhow::ensure!(
+                (1..=4096).contains(&limit),
+                "hardware log count must be 1..4096"
+            );
+        }
         anyhow::ensure!(
             !self.id.is_empty()
                 && self.id.len() <= 80

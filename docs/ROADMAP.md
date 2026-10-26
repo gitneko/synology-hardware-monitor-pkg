@@ -1,6 +1,6 @@
 # Implementation status and roadmap
 
-Current package build: **0.8.0-0039**, local development documentation updated on 23 October 2026.
+Current package build: **0.8.0-0043**, maintenance and large-backup changes updated on 26 October 2026.
 
 ## Implemented
 
@@ -10,7 +10,8 @@ Current package build: **0.8.0-0039**, local development documentation updated o
 - Read-only Redfish discovery/polling, standard health/sensors and selected storage/OEM links, log baseline/deduplication and reachability monitoring.
 - Persistent alarms, confirmed recoveries, optional reminders, retained faults when observations become unknown, PSU representation deduplication and multi-cause summary grouping.
 - Independent SMTP and DSM desktop queues, event filters, per-device enablement, SMTP recipient progress, plain/STARTTLS/implicit TLS, editable templates, local timestamps and manual tests.
-- Filtered full-history CSV, audited event clearing, encrypted app backup/restore with paused restart and no replay of pending historical jobs.
+- Independent configurable event/hardware-log retention (90-day defaults), daily/manual cleanup with preview and per-device disabled/all/latest-N log collection. Fixed audit retention of 10,000 entries.
+- Filtered full-history CSV, audited event clearing, disk-backed compressed/encrypted large app backup/restore with progress, cancellation, chunked upload and native file download; paused restart and no replay of pending historical jobs.
 - German/English interface, Automatic/Deutsch/English preference, independent saved channel languages, localized new event messages/API errors/CSV headings and English documentation. Historical free text and manufacturer logs are preserved.
 
 ## Confirmed platform and hardware tests
@@ -34,4 +35,4 @@ Authorized testing also verifies the HPE ProLiant DL160 Gen10 with iLO 5 v3.22 u
 
 ## Later extensions
 
-Maintenance windows, acknowledgement, flapping/debounce, per-component limits/rules and finer recipient/channel profiles. Historical measurement charts are not implemented; the database currently retains the latest snapshot plus event history. Scheduled app backups, streaming large exports and general migration of future incompatible backup formats remain future work.
+Maintenance windows, acknowledgement, flapping/debounce, per-component limits/rules and finer recipient/channel profiles. Historical measurement charts are not implemented; the database currently retains the latest snapshot plus event history. Scheduled app backups and general migration of future incompatible backup formats remain future work. The maintenance/large-backup work originally deferred until after SNMP has been brought forward into master.

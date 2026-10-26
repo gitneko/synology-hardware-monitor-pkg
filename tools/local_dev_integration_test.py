@@ -137,6 +137,37 @@ def main():
             assert any(row['reading'] == 42 for row in item['snapshot']['observations']), item
             assert PASSWORD not in json.dumps(view)
             assert (root/'state/master.key').stat().st_mode & 0o777 == 0o600
+            # Real background jobs, binary download and chunk upload through HTTP.
+            def completed(job):
+                for _ in range(2000):
+                    status=write({'action':'job_status','id':job})
+                    assert status['ok'],status
+                    status=status['status']
+                    assert status['state'] not in ['failed','cancelled'],status
+                    if status['state']=='ready':return status['result']
+                    time.sleep(.01)
+                raise AssertionError('job timeout')
+            history=view['history']
+            assert history['settings']=={'events_days':90,'hardware_logs_days':90}
+            assert write({'action':'retention_save','settings':{'events_days':7,'hardware_logs_days':30},'revision':history['revision']})['ok']
+            cleanup=write({'action':'cleanup_preview'})['job'];completed(cleanup)
+            assert write({'action':'cleanup_run','id':cleanup,'confirm':True})['ok'];completed(cleanup)
+            job=write({'action':'backup_export_start','password':'synthetic-backup-password'})['job'];completed(job)
+            status,archive=request(path='/api.cgi?download='+job)
+            assert status==200 and archive.startswith(b'HWMON-STREAM-1\n') and PASSWORD.encode() not in archive
+            status,metadata=request('HEAD',path='/api.cgi?download='+job)
+            assert status==200 and metadata==b''
+            upload=write({'action':'backup_upload_start'})['job']
+            for offset in range(0,len(archive),512*1024):
+                part=archive[offset:offset+512*1024]
+                result=write({'action':'backup_upload_part','id':upload,'offset':offset,'data':base64.b64encode(part).decode()})
+                assert result['ok'] and result['bytes']==offset+len(part),result
+            assert write({'action':'backup_inspect_start','id':upload,'bytes':len(archive),'password':'synthetic-backup-password'})['ok']
+            summary=completed(upload);assert summary['devices']==1
+            assert write({'action':'backup_restore_start','id':upload,'expected_audit':summary['expected_audit'],'confirm':True})['ok']
+            assert completed(upload)['restored']
+            assert dashboard()['history']['settings']=={'events_days':7,'hardware_logs_days':30}
+            assert dashboard()['devices'][0]['device']['enabled'] is False
             # Stop/restart retains the same devices, encrypted credentials and measurements.
             process.terminate()
             output, error = process.communicate(timeout=10)

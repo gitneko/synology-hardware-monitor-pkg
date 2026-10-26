@@ -81,8 +81,9 @@ process.stdout.write(tree.children[0].children[0].options.attrs.src);"""
         assert b'POST' in javascript and b'csrf' in javascript and b'certificate_pem' in javascript, 'Device administration assets missing'
 
         assert b'mail_save' in javascript and b'mail_test' in javascript and b'mail_preview' in javascript, 'SMTP settings assets missing'
-        assert all(action in javascript for action in [b'events_export',b'events_clear',b'backup_export',b'backup_inspect',b'backup_restore']), 'History/backup UI actions missing'
-        assert b'WIEDERHERSTELLEN' in javascript and 'docs/BACKUP-RESTORE.md' in members
+        assert all(action in javascript for action in [b'events_export',b'events_clear',b'backup_export_start',b'backup_upload_part',b'backup_inspect_start',b'backup_restore_start',b'cleanup_preview',b'cleanup_run',b'retention_save',b'hardware_log']), 'History/backup UI actions missing'
+        assert all(value in javascript for value in [b'HEAD',b'SynoToken',b'HardwareMonitor-backup.hmbackup']), 'Authenticated native backup download missing'
+        assert b'WIEDERHERSTELLEN' in javascript and 'docs/BACKUP-RESTORE.md' in members and 'docs/HISTORY-RETENTION.md' in members
         assert app['texts']=='texts'
         assert app['preloadTexts']==[f'{section}:{key}_{part}' for section in ['notification','notification_details','notification_details_en','notification_details_de'] for key in ['test','critical','warning','recovery','repeat','hardware_log'] for part in ['title','body']]
         assert all(word in javascript for word in [b'notification_save',b'time_local',b'time_utc',b'date_format',b'desktop_enabled'])

@@ -1353,6 +1353,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut s = Store::open(dir.path()).unwrap();
         let d = Device {
+            hardware_log: Default::default(),
             id: "ack-test".into(),
             name: "Test".into(),
             endpoint: "https://bmc.example/".into(),

@@ -34,7 +34,7 @@ Only DSM administrators can change acknowledgement, using the existing HTTPS/ori
 
 Acknowledgement records are keyed by device and canonical resource. Proven resource aliases can carry state forward; an already independent unacknowledged peer is not silently acknowledged. Retargeting or deleting a device removes its active records. Clearing event history preserves them.
 
-Logical app backup format 3 includes acknowledgement metadata and supports migration of formats 1 and 2. Restore preserves imported reasons/attribution for review, resets acknowledgement and version tokens, pauses monitoring/delivery and cancels historical jobs. Administrators must deliberately acknowledge imported faults again. The local SQLite/master-key upgrade backup preserves active acknowledgements as ordinary database state.
+Acknowledgement metadata was added in logical app backup format 3 and remains included in the current format 6. Earlier formats are migrated; see [Backup and restore](BACKUP-RESTORE.md). Restore preserves imported reasons/attribution for review, resets acknowledgement and version tokens, pauses monitoring/delivery and cancels historical jobs. Administrators must deliberately acknowledge imported faults again. The local SQLite/master-key upgrade backup preserves active acknowledgements as ordinary database state.
 
 ## Verification boundary
 

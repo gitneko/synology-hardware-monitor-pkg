@@ -75,6 +75,7 @@ impl Store {
           END;")?;
         crate::acknowledgement::initialize(&conn)?;
         crate::mail_replay::initialize(&conn)?;
+        crate::retention::initialize(&conn)?;
         Ok(Self(conn))
     }
 
@@ -165,6 +166,14 @@ impl Store {
                 "INSERT INTO devices(id,config,secret,revision) VALUES(?1,?2,?3,1)",
                 params![d.id, serde_json::to_string(d)?, secret],
             )?;
+        }
+        let changed_log_policy = existing
+            .as_ref()
+            .map(|x| serde_json::from_str::<Device>(&x.0))
+            .transpose()?
+            .is_some_and(|old| old.hardware_log != d.hardware_log);
+        if changed_log_policy {
+            tx.execute("UPDATE devices SET logs_initialized=0 WHERE id=?1", [&d.id])?;
         }
         if changed_target {
             tx.execute(
@@ -276,6 +285,7 @@ impl Store {
                 return Ok(false);
             }
         }
+        let (retention, _) = crate::retention::settings(&tx)?;
         for (alias, canonical) in &snapshot.resource_aliases {
             if alias != canonical && snapshot.observations.iter().any(|o| &o.key == canonical) {
                 merge_alarm_alias(&tx, &d.id, alias, canonical)?;
@@ -444,6 +454,9 @@ impl Store {
             [&d.id],
             |r| r.get(0),
         )?;
+        snapshot.logs.retain(|log| {
+            d.hardware_log != HardwareLogRead::Disabled && retention.accepts(log, now)
+        });
         for log in &snapshot.logs {
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO hardware_logs VALUES(?1,?2,?3)",
@@ -473,14 +486,7 @@ impl Store {
                 )?;
             }
         }
-        tx.execute("UPDATE devices SET last_poll=?2,snapshot=?3,logs_initialized=CASE WHEN ?4 THEN 1 ELSE logs_initialized END WHERE id=?1", params![d.id,now,serde_json::to_string(&snapshot)?,snapshot.logs_complete])?;
-        // Retention bounds operational growth; active alarm state and log fingerprints survive.
-        tx.execute("DELETE FROM outbox WHERE (delivered IS NOT NULL OR cancelled=1 OR (transport='smtp' AND NOT EXISTS(SELECT 1 FROM mail_recipient WHERE outbox_id=outbox.id AND delivered IS NULL AND permanent=0 AND attempts<8))) AND event_id IN (SELECT id FROM events WHERE created < ?1)", [now-90*86400])?;
-        tx.execute("DELETE FROM desktop_jobs WHERE (delivered IS NOT NULL OR cancelled=1 OR attempts>=8) AND event_id IN (SELECT id FROM events WHERE created<?1)",[now-90*86400])?;
-        tx.execute(
-            "DELETE FROM events WHERE created < ?1 AND id NOT IN (SELECT event_id FROM outbox) AND id NOT IN (SELECT event_id FROM desktop_jobs)",
-            [now - 90 * 86400],
-        )?;
+        tx.execute("UPDATE devices SET last_poll=?2,snapshot=?3,logs_initialized=CASE WHEN ?4 THEN 1 ELSE logs_initialized END WHERE id=?1", params![d.id,now,serde_json::to_string(&snapshot)?,snapshot.logs_complete && d.hardware_log != HardwareLogRead::Disabled])?;
         tx.commit()?;
         Ok(true)
     }
@@ -1061,6 +1067,7 @@ mod tests {
     use super::*;
     fn device() -> Device {
         Device {
+            hardware_log: Default::default(),
             id: "test".into(),
             name: "Test".into(),
             endpoint: "https://ilo.example/".into(),
@@ -1265,6 +1272,13 @@ mod tests {
         other.id = "other-device".into();
         store.put(&other, b"ciphertext").unwrap();
         store.apply(&other, &Snapshot::default(), 10000000).unwrap();
+        crate::retention::cleanup(
+            &mut store.0,
+            &crate::retention::Settings::default(),
+            10000000,
+            |_| Ok(()),
+        )
+        .unwrap();
         assert!(store.dashboard().unwrap()["events"]
             .as_array()
             .unwrap()
@@ -2076,6 +2090,13 @@ mod tests {
         let pending = s.pending_mail(101).unwrap().unwrap();
         s.apply(&d, &snap(Health::Warning), 100 + 91 * 86400)
             .unwrap();
+        crate::retention::cleanup(
+            &mut s.0,
+            &crate::retention::Settings::default(),
+            100 + 91 * 86400,
+            |_| Ok(()),
+        )
+        .unwrap();
         assert_eq!(
             s.0.query_row(
                 "SELECT COUNT(*) FROM mail_recipient WHERE outbox_id=?1",

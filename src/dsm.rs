@@ -84,6 +84,62 @@ impl AuthContext {
         Ok(())
     }
 }
+/// Native browser downloads cannot set X-SYNO-TOKEN. DSM accepts SynoToken
+/// as a query parameter; decode only this read-only route, never a write.
+pub fn download_query(query: &str) -> Result<Option<(String, Option<String>)>> {
+    anyhow::ensure!(query.len() <= 16384, BoundaryError("job_invalid"));
+    let pairs = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
+    if !pairs.iter().any(|(key, _)| key == "download") {
+        return Ok(None);
+    }
+    let mut id = None;
+    let mut token = None;
+    for (key, value) in pairs {
+        match key.as_ref() {
+            "download" => {
+                anyhow::ensure!(
+                    id.is_none() && crate::jobs::valid_id(&value),
+                    BoundaryError("job_invalid")
+                );
+                id = Some(value.into_owned());
+            }
+            "SynoToken" => {
+                anyhow::ensure!(
+                    token.is_none()
+                        && !value.is_empty()
+                        && value.len() <= 4096
+                        && value.bytes().all(|b| (0x21..=0x7e).contains(&b)),
+                    BoundaryError("cgi_context_invalid")
+                );
+                token = Some(value.into_owned());
+            }
+            _ => anyhow::bail!(BoundaryError("job_invalid")),
+        }
+    }
+    Ok(Some((id.expect("download parameter"), token)))
+}
+impl AuthContext {
+    pub fn download_token(&mut self, token: Option<&str>) -> Result<()> {
+        anyhow::ensure!(
+            self.environment
+                .get("REQUEST_METHOD")
+                .is_some_and(|m| matches!(m.as_str(), "GET" | "HEAD")),
+            BoundaryError("write_operation_invalid")
+        );
+        if let Some(token) = token {
+            anyhow::ensure!(
+                self.environment
+                    .get("HTTP_X_SYNO_TOKEN")
+                    .filter(|header| !header.is_empty())
+                    .is_none_or(|header| header == token),
+                BoundaryError("cgi_context_invalid")
+            );
+            self.environment
+                .insert("HTTP_X_SYNO_TOKEN".into(), token.into());
+        }
+        Ok(())
+    }
+}
 const AUTH_KEYS: &[&str] = &[
     "HTTP_COOKIE",
     "REMOTE_ADDR",
@@ -157,6 +213,15 @@ pub async fn authenticate(context: &AuthContext) -> Result<(String, Role)> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    // HEAD is the same read authorization as GET; file-body suppression stays
+    // in the bridge so older DSM helpers need not implement a new method.
+    if context
+        .environment
+        .get("REQUEST_METHOD")
+        .is_some_and(|method| method == "HEAD")
+    {
+        command.env("REQUEST_METHOD", "GET");
+    }
     let output = tokio::time::timeout(Duration::from_secs(3), command.output())
         .await
         .context(BoundaryError("dsm_helper_timeout"))?
@@ -616,5 +681,56 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("private-test-marker"));
+    }
+    #[test]
+    fn native_download_parameters_are_decoded_strictly_and_only_mapped_for_reads() {
+        let id = "a".repeat(32);
+        let parsed = download_query(&format!("download={id}&SynoToken=synthetic%2Btoken%2F%3D"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed, (id.clone(), Some("synthetic+token/=".into())));
+        let mut context = AuthContext {
+            environment: [
+                ("REQUEST_METHOD".into(), "HEAD".into()),
+                ("HTTP_COOKIE".into(), "id=synthetic-cookie".into()),
+            ]
+            .into(),
+            diagnostic: false,
+        };
+        context
+            .environment
+            .insert("HTTP_X_SYNO_TOKEN".into(), String::new());
+        context.download_token(parsed.1.as_deref()).unwrap();
+        assert_eq!(
+            context.environment["HTTP_X_SYNO_TOKEN"],
+            "synthetic+token/="
+        );
+        assert_eq!(context.environment["HTTP_COOKIE"], "id=synthetic-cookie");
+        assert!(context.download_token(Some("different-token")).is_err());
+        context
+            .environment
+            .insert("REQUEST_METHOD".into(), "POST".into());
+        assert!(context.download_token(parsed.1.as_deref()).is_err());
+        assert_eq!(download_query("diagnose=1").unwrap(), None);
+        assert_eq!(
+            download_query(&format!("download={id}")).unwrap(),
+            Some((id.clone(), None))
+        );
+        for query in [
+            "download=../monitor.db".to_string(),
+            format!("download={id}&download={id}"),
+            format!("download={id}&SynoToken=a&SynoToken=b"),
+            format!("download={id}&SynoToken=%0d%0aInjected"),
+            format!("download={id}&SynoToken=%00"),
+            format!("download={id}&SynoToken=%FF"),
+            format!("download={id}&SynoToken="),
+            format!("download={id}&_sid=forbidden"),
+            format!("download={id}&SynoToken={}", "x".repeat(4097)),
+        ] {
+            assert!(
+                download_query(&query).is_err(),
+                "accepted invalid download query"
+            );
+        }
     }
 }

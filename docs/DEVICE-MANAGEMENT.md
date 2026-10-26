@@ -29,3 +29,17 @@ Build 0034 uses explicit neutral labels: **Not present**, **Information**, **Con
 Build 0027 accepts one optional trailing slash on both advertised Redfish session collections and returned session resources, as used by iLO 5. Requests keep the exact advertised/returned URL. Sessions must remain within the same origin and the collection used for login; nested, encoded, empty and malformed session IDs remain rejected. Pinned authentication writes use fresh verified TLS connections; POST requests are not automatically replayed after network failure. Hardware GETs retain connection reuse and the existing bounded safe retry.
 
 The connection test now gives specific translated errors for invalid/unsupported responses, response-size limits and HTTP failures. The compatibility mode's UI name includes iLO; its stored `idrac7` value and existing device settings are unchanged. The tested iLO factory certificate lacks a complete issuer chain and an IP SAN, so Standard mode still correctly rejects it. To use the supplied factory certificate, explicitly choose the compatibility mode and import that exact certificate; alternatively configure a trusted certificate chain and matching DNS name for Standard mode.
+
+## Hardware log reading
+
+Build **0.8.0-0042** adds a per-device **Read hardware log** setting:
+
+| Mode | Behavior |
+|---|---|
+| Disabled | Do not traverse log-service/log-entry resources. Hardware measurements continue. |
+| All available entries | Traverse advertised log collections within the normal scan budgets. Existing devices default to this mode. |
+| Newest N entries | Request chronological descending `Created` ordering and a bounded count, then merge the newest candidates across advertised log services. N is 1–4096, initially 1000 in the editor. |
+
+Limited retrieval uses the controller's `$orderby=Created desc` and `$top` query support. Rejected queries, observed ascending results or excessive page sizes are reported as incomplete collection; the app does not silently label the first unfiltered page as the newest entries. Entries without a valid `Created` value cannot be placed in a newest selection and are omitted with a warning; All available preserves them. Controllers that do not support these queries should use All available or Disabled. Pagination, individual response limits and the normal resource/time/byte/item budgets still apply in both reading modes. All available is not a promise to fetch an arbitrarily large controller database in one poll; incomplete scans remain explicitly marked.
+
+Changing the reading mode establishes a new log baseline after the next complete scan, avoiding notifications for historical entries exposed by the new selection. Already stored recent logs are preserved. The setting is independent of [hardware-log retention](HISTORY-RETENTION.md): requesting 100 entries does not reduce stored history to 100, disabling collection does not disable cleanup, and even All available cannot reimport entries older than the configured retention cutoff.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local TLS Redfish integration. Synthetic data; never connects to real equipment."""
 import base64
+from datetime import datetime, timedelta, UTC
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +21,9 @@ BINARY = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "target/de
 VERSION = subprocess.check_output([str(BINARY), "--version"], text=True).strip().split()[-1]
 state = {"storage_failures": 0, "storage_forced_status": 0, "fan_state": "Enabled", "health": "Critical", "storage": True, "log": "old", "redirect": False, "reject": False}
 requests = []
+TEST_NOW=datetime.now(UTC)
+LOG_TIME=(TEST_NOW-timedelta(days=9)).isoformat().replace("+00:00","Z")
+SELECTED_TIME={i:(TEST_NOW-timedelta(days=4-i)).isoformat().replace("+00:00","Z") for i in [1,2,3]}
 HPE_STORAGE = {item['uri']: item['body'] for item in json.loads((ROOT/'tests/fixtures/hpe-smartstorage-hierarchy.json').read_text())['resources']}
 HPE_APPLICABILITY = {item['uri']: item['body'] for item in json.loads((ROOT/'tests/fixtures/hpe-applicability.json').read_text())['resources']}
 HPE_CONTROLLER = '/redfish/v1/Systems/1/SmartStorage/ArrayControllers/2/'
@@ -56,7 +61,7 @@ class Mock(BaseHTTPRequestHandler):
             "/redfish/v1/Chassis/A/Thermal": {"Fans": [{"MemberId": "FanA", "Name": "Fan A", "Status": {"Health": state["health"], "State": state["fan_state"]}, "Reading": 32, "ReadingUnits": "Percent"}]},
             "/redfish/v1/Systems/NonNumeric/LogServices": {"Members": [{"@odata.id": "/redfish/v1/Systems/NonNumeric/LogServices/IML"}]},
             "/redfish/v1/Systems/NonNumeric/LogServices/IML": {"Entries": {"@odata.id": "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries"}},
-            "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries": {"Members": [{"Id": state["log"], "Message": "Synthetic historical fault", "Severity": "Critical", "EntryType": "Event", "Created": "2026-10-17T12:00:00Z"}]},
+            "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries": {"Members": [{"Id": state["log"], "Message": "Synthetic historical fault", "Severity": "Critical", "EntryType": "Event", "Created": LOG_TIME}]},
         }
         if self.path.endswith("/Storage") and (state["storage_failures"] or state["storage_forced_status"]):
             if state["storage_failures"]: state["storage_failures"] -= 1
@@ -77,6 +82,16 @@ class Mock(BaseHTTPRequestHandler):
             data['/redfish/v1/Systems/1/']['Storage'] = {'@odata.id': '/redfish/v1/Systems/1/Storage/'}
             for name in ['Thermal','Power']:
                 data['/redfish/v1/Chassis/1/'][name] = {'@odata.id': f'/redfish/v1/Chassis/1/{name}/'}
+        parsed=urllib.parse.urlsplit(self.path)
+        query=urllib.parse.parse_qs(parsed.query)
+        if parsed.path.endswith('/Entries') and '$orderby' in query:
+            assert query['$orderby']==['Created desc'] and query['$top']==['2']
+            assert state.get('log_selection')
+            entries=[{'Id':str(i),'Message':f'Synthetic selected history {i}','Severity':'OK','EntryType':'Event','Created':SELECTED_TIME[i]} for i in [3,2,1]]
+            if state['log_selection']=='ignored': selected=entries
+            elif state['log_selection']=='ascending': selected=list(reversed(entries[:2]))
+            else: selected=entries[:2]
+            data[self.path]={'Members':selected}
         if self.path not in data:
             self.send_error(404); return
         if state['sessions'] and self.path == '/redfish/v1/root/':
@@ -211,7 +226,23 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         recovered = snapshot()
         assert any(e["kind"] == "recovery" and "Fan A" in e["message"] for e in recovered["events"])
         assert sum(e["kind"] == "hardware_log" for e in recovered["events"]) == 1
-        assert next(e for e in recovered["events"] if e["kind"] == "hardware_log")["source_created"] == "2026-10-17T12:00:00Z"
+        assert next(e for e in recovered["events"] if e["kind"] == "hardware_log")["source_created"] == LOG_TIME
+        # Device log policies do not affect hardware discovery.
+        config['hardware_log']={'mode':'disabled'};put();requests.clear();run('poll-once')
+        assert not any('/LogServices' in path for path in requests)
+        assert snapshot()['devices'][0]['snapshot']['logs']==[]
+        config['hardware_log']={'mode':'latest','limit':2};put()
+        state['log_selection']='supported';requests.clear();run('poll-once')
+        selected=snapshot()['devices'][0]['snapshot']
+        assert [log['created'] for log in selected['logs']]==[SELECTED_TIME[3],SELECTED_TIME[2]]
+        assert selected['logs_complete']
+        assert any('%24orderby=Created+desc' in path for path in requests)
+        for failure in ['ignored','ascending']:
+            state['log_selection']=failure;run('poll-once')
+            selected=snapshot()['devices'][0]['snapshot']
+            assert not selected['logs_complete'] and selected['logs']==[]
+            assert any(c['outcome']=='log_selection_unsupported' for c in selected['capabilities'])
+        state.pop('log_selection');config['hardware_log']={'mode':'all'};put()
         state["redirect"] = True; run("poll-once", success=False); state["redirect"] = False
         state["reject"] = True; run("poll-once", success=False); state["reject"] = False
         for path in (temp / "private").glob("*"):
@@ -287,7 +318,7 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         with socket.socket(socket.AF_UNIX) as mock:
             mock.bind(str(temp/"api.sock"));mock.listen(1);mock.settimeout(5)
             received=[]
-            def mock_reply(reply=None):
+            def mock_reply(reply=None,raw=None,head=False):
                 connection,_=mock.accept()
                 with connection:
                     header=connection.recv(4);length=struct.unpack(">I",header)[0]
@@ -297,6 +328,11 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
                         assert chunk, "incomplete API request"
                         request.extend(chunk)
                     received.append(json.loads(request))
+                    if raw is not None:
+                        connection.sendall(struct.pack(">IQ",0xffffffff,len(raw)))
+                        if not head:
+                            for offset in range(0,len(raw),65536): connection.sendall(raw[offset:offset+65536])
+                        return
                     payload=json.dumps(reply if reply is not None else {"ok":True,"code":"authenticated","data":{"secret":"must-never-leave"}}).encode()
                     connection.sendall(struct.pack(">I",len(payload))+payload)
             worker=threading.Thread(target=mock_reply);worker.start()
@@ -316,13 +352,14 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             assert forwarded["locale"]=="en"
             expected=json.loads(json.dumps(body["operation"]))
             expected["device"]["tls_profile"]="standard"
+            expected["device"]["hardware_log"]={"mode":"all"}
             assert forwarded["csrf"]==body["csrf"] and forwarded["operation"]==expected
             assert forwarded["auth"]["environment"]["HTTP_ORIGIN"]==post_env["HTTP_ORIGIN"]
             assert forwarded["auth"]["environment"]["HTTPS"]=="on"
             assert b"Status: 200 OK" in posted
             # The new explicit profile and certificate survive the same bridge.
             pinned=json.loads(json.dumps(body))
-            pinned["operation"]["device"].update(tls_profile="idrac7",trust_mode="pinned",certificate_pem=(temp/"ca.crt").read_text())
+            pinned["operation"]["device"].update(hardware_log={"mode":"all"},tls_profile="idrac7",trust_mode="pinned",certificate_pem=(temp/"ca.crt").read_text())
             payload=json.dumps(pinned).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
             worker=threading.Thread(target=mock_reply);worker.start()
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
@@ -348,6 +385,36 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
             assert not worker.is_alive()
             assert json.loads(posted.split(b"\r\n\r\n",1)[1])["file"]==reply["file"]
+            # Native binary streaming carries the archive without a JSON/Base64 response.
+            raw=b'HWMON-STREAM-1\n'+bytes(range(256))*(140*1024)
+            worker=threading.Thread(target=mock_reply,kwargs={'raw':raw});worker.start()
+            downloaded=run('cgi',env={**fake_env,'REQUEST_METHOD':'GET','QUERY_STRING':'download='+'a'*32})
+            worker.join(6);assert not worker.is_alive()
+            headers,content=downloaded.split(b'\r\n\r\n',1)
+            assert content==raw and f'Content-Length: {len(raw)}'.encode() in headers
+            assert b'Content-Disposition: attachment' in headers
+            assert received[-1]['operation']=={'action':'backup_download','id':'a'*32}
+            # The actual browser GET has no custom headers; SynoToken is forwarded
+            # from the strict download query to the fixed native helper context.
+            browser_env={key:value for key,value in fake_env.items() if key!='HTTP_X_SYNO_TOKEN'}
+            worker=threading.Thread(target=mock_reply,kwargs={'raw':raw});worker.start()
+            downloaded=run('cgi',env={**browser_env,'REQUEST_METHOD':'GET','QUERY_STRING':'download='+'a'*32+'&SynoToken=synthetic%2Bdownload%2Ftoken%3D'})
+            worker.join(6);assert not worker.is_alive()
+            assert downloaded.split(b'\r\n\r\n',1)[1]==raw
+            assert received[-1]['auth']['environment']['HTTP_X_SYNO_TOKEN']=='synthetic+download/token='
+            worker=threading.Thread(target=mock_reply,kwargs={'raw':raw,'head':True});worker.start()
+            metadata=run('cgi',env={**fake_env,'REQUEST_METHOD':'HEAD','QUERY_STRING':'download='+'a'*32})
+            worker.join(6);assert not worker.is_alive()
+            headers,content=metadata.split(b'\r\n\r\n',1)
+            assert content==b'' and f'Content-Length: {len(raw)}'.encode() in headers
+            assert b'Content-Type: application/octet-stream' in headers
+            assert received[-1]['auth']['environment']['REQUEST_METHOD']=='HEAD'
+            # A bounded chunk above the ordinary form cap is forwarded too.
+            chunk={'csrf':'synthetic-package-token','operation':{'action':'backup_upload_part','id':'a'*32,'offset':0,'data':base64.b64encode(b'x'*(512*1024)).decode()}}
+            payload=json.dumps(chunk).encode();post_env['CONTENT_LENGTH']=str(len(payload))
+            worker=threading.Thread(target=mock_reply);worker.start()
+            run('cgi',env=post_env,password=payload);worker.join(6)
+            assert not worker.is_alive() and received[-1]['operation']==chunk['operation']
             body["operation"]["device"]["name"]="X"*(200*1024)
             payload=json.dumps(body).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
             rejected=run("cgi",env=post_env,password=payload)

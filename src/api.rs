@@ -102,6 +102,43 @@ pub enum Operation {
         confirm: bool,
         expected_audit: i64,
     },
+    RetentionSave {
+        settings: crate::retention::Settings,
+        revision: i64,
+    },
+    CleanupPreview,
+    CleanupRun {
+        id: String,
+        confirm: bool,
+    },
+    JobStatus {
+        id: String,
+    },
+    JobCancel {
+        id: String,
+    },
+    BackupExportStart {
+        password: String,
+    },
+    BackupUploadStart,
+    BackupUploadPart {
+        id: String,
+        offset: u64,
+        data: String,
+    },
+    BackupInspectStart {
+        id: String,
+        bytes: u64,
+        password: String,
+    },
+    BackupRestoreStart {
+        id: String,
+        expected_audit: i64,
+        confirm: bool,
+    },
+    BackupDownload {
+        id: String,
+    },
     Delete {
         id: String,
         revision: i64,
@@ -111,7 +148,9 @@ pub enum Operation {
 impl Drop for Operation {
     fn drop(&mut self) {
         match self {
-            Self::BackupExport { password }
+            Self::BackupExportStart { password }
+            | Self::BackupInspectStart { password, .. }
+            | Self::BackupExport { password }
             | Self::BackupInspect { password, .. }
             | Self::BackupRestore { password, .. } => password.zeroize(),
             _ => {}
@@ -129,6 +168,8 @@ pub struct WriteBody {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceInput {
+    #[serde(default)]
+    pub hardware_log: crate::model::HardwareLogRead,
     pub id: Option<String>,
     pub revision: Option<i64>,
     pub name: String,
@@ -165,19 +206,32 @@ pub struct Api {
     pub store: Arc<Mutex<Store>>,
     pub vault: Arc<Vault>,
     probes: tokio::sync::Semaphore,
-    mail_gate: tokio::sync::Mutex<()>,
+    pub(crate) mail_gate: Arc<tokio::sync::Mutex<()>>,
+    pub jobs: Arc<crate::jobs::Manager>,
     archives: tokio::sync::Semaphore,
     replay_turn: std::sync::atomic::AtomicBool,
 }
 impl Api {
     pub fn new(store: Arc<Mutex<Store>>, vault: Arc<Vault>) -> Self {
+        let state = std::path::Path::new(
+            store
+                .lock()
+                .unwrap()
+                .0
+                .path()
+                .expect("file-backed application store"),
+        )
+        .parent()
+        .unwrap()
+        .to_path_buf();
         Self {
+            jobs: Arc::new(crate::jobs::Manager::new(&state)),
             store,
             vault,
             probes: tokio::sync::Semaphore::new(2),
             archives: tokio::sync::Semaphore::new(1),
             replay_turn: std::sync::atomic::AtomicBool::new(true),
-            mail_gate: tokio::sync::Mutex::new(()),
+            mail_gate: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
     pub async fn handle(&self, request: Request) -> Value {
@@ -250,6 +304,7 @@ impl Api {
                 return Ok(json!({"ok":true,"code":"authenticated"}));
             }
             let store = self.store.lock().unwrap();
+            let read = store.0.unchecked_transaction()?;
             let mut data = store.dashboard()?;
             for item in data["devices"].as_array_mut().unwrap() {
                 let device = item["device"].as_object_mut().unwrap();
@@ -271,6 +326,8 @@ impl Api {
                 }
             }
             crate::i18n::dashboard(&mut data, request.locale);
+            let (settings, revision) = store.retention_settings()?;
+            data["history"] = json!({"settings":settings,"revision":revision,"audit_limit":10000});
             if local {
                 data["runtime"] = json!("local-development");
             }
@@ -284,6 +341,7 @@ impl Api {
             }
             data["notifications"] = json!({"automatic_delivery":store.mail_enabled()||policy.desktop_enabled,"mail_enabled":store.mail_enabled(),"desktop_enabled":policy.desktop_enabled,"desktop_self_test_available":!local && dsm::desktop_test_available()});
             if role == Role::Administrator {
+                data["jobs"] = json!(self.jobs.list(&binding(actor, &request.auth)));
                 data["notification_settings"] =
                     json!({"settings":policy,"revision":policy_revision});
                 data["csrf"] = json!(mint_csrf(&self.vault, actor, &request.auth, crate::now())?);
@@ -303,6 +361,7 @@ impl Api {
                     }
                 };
             }
+            read.commit()?;
             return Ok(json!({"ok":true,"data":data}));
         }
         anyhow::ensure!(
@@ -313,6 +372,22 @@ impl Api {
             role == Role::Administrator,
             BoundaryError("write_administrator_required")
         );
+        let owner = binding(actor, &request.auth);
+        if let Operation::BackupDownload { id } = &request.operation {
+            anyhow::ensure!(
+                local
+                    || request
+                        .auth
+                        .environment
+                        .iter()
+                        .any(|(key, value)| key == "REQUEST_METHOD"
+                            && matches!(value.as_str(), "GET" | "HEAD")),
+                BoundaryError("write_operation_invalid")
+            );
+            let job = self.jobs.get(id, &owner)?;
+            let (_file, length, _cancel) = self.jobs.open_download(&job.id)?;
+            return Ok(json!({"ok":true,"download":id,"length":length}));
+        }
         if !local {
             dsm::validate_write_context(&request.auth)?;
         }
@@ -330,6 +405,21 @@ impl Api {
             && matches!(&request.operation, Operation::NotificationSave { settings } if settings.desktop_enabled)
         {
             anyhow::bail!(BoundaryError("desktop_test_unavailable"));
+        }
+        if let Operation::JobStatus { id } = &request.operation {
+            let mut status = self.jobs.status(id, &owner)?;
+            let code = status["status"]["code"].as_str().unwrap_or("job_failed");
+            if code != "ok" {
+                status["status"]["error"] = json!(crate::i18n::text(message(code), request.locale));
+            }
+            return Ok(status);
+        }
+        if let Operation::JobCancel { id } = &request.operation {
+            self.jobs.cancel(id, &owner)?;
+            return Ok(json!({"ok":true}));
+        }
+        if let Some(result) = self.job_operation(&request.operation, &owner, actor) {
+            return result;
         }
         // Serialize config/device cancellation with SMTP submission. An already
         // submitted message cannot be recalled; no next recipient starts after a change.
@@ -592,10 +682,80 @@ impl Api {
                     }
                 })
             }
-            Operation::Dashboard => unreachable!(),
+            Operation::Dashboard
+            | Operation::RetentionSave { .. }
+            | Operation::CleanupPreview
+            | Operation::CleanupRun { .. }
+            | Operation::JobStatus { .. }
+            | Operation::JobCancel { .. }
+            | Operation::BackupExportStart { .. }
+            | Operation::BackupUploadStart
+            | Operation::BackupUploadPart { .. }
+            | Operation::BackupInspectStart { .. }
+            | Operation::BackupRestoreStart { .. }
+            | Operation::BackupDownload { .. } => unreachable!(),
         }
     }
 
+    pub(crate) fn state_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(
+            self.store
+                .lock()
+                .unwrap()
+                .0
+                .path()
+                .expect("file-backed application store"),
+        )
+        .parent()
+        .unwrap()
+        .to_path_buf()
+    }
+    pub fn automatic_cleanup(&self) -> Result<bool> {
+        if self.jobs.busy() {
+            return Ok(false);
+        }
+        let due: i64 = self.store.lock().unwrap().0.query_row(
+            "SELECT value FROM counters WHERE name='history_cleanup_due'",
+            [],
+            |r| r.get(0),
+        )?;
+        if crate::now() < due {
+            return Ok(false);
+        }
+        let job = self
+            .jobs
+            .create("automatic-maintenance", crate::jobs::Kind::Cleanup)?;
+        let path = self.state_path();
+        self.jobs.run(job, "automatic_cleanup", move |job| {
+            let mut store = Store::open(&path)?;
+            job.watch_sql(&store.0);
+            let (settings, revision) = store.retention_settings()?;
+            let result = crate::retention::cleanup_at_revision(
+                &mut store.0,
+                &settings,
+                crate::now(),
+                revision,
+                |n| job.progress(n, 0),
+            );
+            crate::jobs::Job::unwatch_sql(&store.0);
+            store.audit(
+                "system",
+                "history.cleanup",
+                "application",
+                &match &result {
+                    Ok(counts) => serde_json::to_string(counts)?,
+                    Err(error) => crate::dsm::error_code(error).into(),
+                },
+            )?;
+            let counts = result?;
+            store.0.execute(
+                "UPDATE counters SET value=?1 WHERE name='history_cleanup_due'",
+                [crate::now() + 86400],
+            )?;
+            Ok(json!({"counts":counts}))
+        })?;
+        Ok(true)
+    }
     pub async fn deliver_legacy(&self) -> Result<()> {
         let _guard = self.mail_gate.lock().await;
         let pending = self.store.lock().unwrap().pending(crate::now())?;
@@ -692,6 +852,14 @@ impl Api {
     }
 }
 
+pub(crate) fn validate_backup_password(password: &str) -> Result<()> {
+    anyhow::ensure!(
+        password.chars().count() >= 12 && password.len() <= 1024,
+        BoundaryError("backup_password_invalid")
+    );
+    Ok(())
+}
+
 fn prepare_mail(store: &Store, vault: &Vault, input: &crate::mail::Input) -> Result<Vec<u8>> {
     input.settings.validate()?;
     let existing = store.mail_settings()?;
@@ -742,6 +910,7 @@ fn prepare(store: &Store, vault: &Vault, input: &DeviceInput) -> Result<(Device,
     let parsed =
         url::Url::parse(&input.endpoint).context(BoundaryError("device_config_invalid"))?;
     let mut device = Device {
+        hardware_log: input.hardware_log.clone(),
         id,
         name: input.name.trim().into(),
         endpoint: parsed.to_string(),
@@ -857,6 +1026,15 @@ fn unhex(value: &str) -> Result<Vec<u8>> {
 pub fn message(code: &str) -> &'static str {
     match code {
         "connection_timeout"=>"Die Redfish-Datenbereiche haben nicht rechtzeitig geantwortet. Netzwerk und Auslastung des Controllers prüfen.",
+        "retention_invalid"=>"Die Aufbewahrungsdauer muss zwischen 0 und 36.500 Tagen liegen. 0 bedeutet unbegrenzt.",
+        "retention_conflict"=>"Die Aufbewahrungsregeln wurden geändert oder die Vorschau ist abgelaufen. Bitte erneut prüfen.",
+        "job_invalid"=>"Der Auftrag ist abgelaufen, gehört zu einer anderen Sitzung oder ist nicht verfügbar.",
+        "job_cancelled"=>"Der Auftrag wurde abgebrochen.",
+        "job_failed"=>"Der Auftrag ist fehlgeschlagen. Dateiformat, freien Speicherplatz und Dienstprotokoll prüfen.",
+        "jobs_full"=>"Zu viele gespeicherte Aufträge. Nicht mehr benötigte Aufträge beenden oder später erneut versuchen.",
+        "upload_invalid"=>"Der Dateiabschnitt ist ungültig oder gehört nicht zum aktuellen Upload. Bitte Datei erneut auswählen.",
+        "storage_full"=>"Für diesen Vorgang ist nicht genügend freier Speicherplatz vorhanden. Eine Reserve von 32 MiB bleibt frei.",
+        "backup_record_large"=>"Ein einzelner Sicherungsdatensatz überschreitet die unterstützten 16 MiB.",
         "backup_password_invalid"=>"Das Sicherungspasswort muss mindestens 12 Zeichen und höchstens 1024 UTF-8-Bytes lang sein.",
         "backup_busy"=>"Eine Sicherungsaktion läuft bereits. Bitte kurz warten.",
         "backup_invalid"=>"Sicherungsdatei oder Passwort ungültig. Es wurden keine Daten geändert.",
@@ -1296,6 +1474,7 @@ mod tests {
     }
     fn input() -> DeviceInput {
         DeviceInput {
+            hardware_log: Default::default(),
             id: None,
             revision: None,
             name: "Synthetic server".into(),
@@ -1459,6 +1638,36 @@ mod tests {
     async fn maintenance_requires_admin_and_csrf_and_exports_only_ciphertext() {
         let (_dir, api) = instance();
         for operation in [
+            Operation::RetentionSave {
+                settings: Default::default(),
+                revision: 0,
+            },
+            Operation::CleanupPreview,
+            Operation::CleanupRun {
+                id: "0".repeat(32),
+                confirm: true,
+            },
+            Operation::JobStatus { id: "0".repeat(32) },
+            Operation::JobCancel { id: "0".repeat(32) },
+            Operation::BackupExportStart {
+                password: "synthetic-backup-password".into(),
+            },
+            Operation::BackupUploadStart,
+            Operation::BackupUploadPart {
+                id: "0".repeat(32),
+                offset: 0,
+                data: "eA==".into(),
+            },
+            Operation::BackupInspectStart {
+                id: "0".repeat(32),
+                bytes: 1,
+                password: "synthetic-backup-password".into(),
+            },
+            Operation::BackupRestoreStart {
+                id: "0".repeat(32),
+                expected_audit: 0,
+                confirm: true,
+            },
             Operation::EventsClear { confirm: true },
             Operation::EventsExport {
                 filter: Default::default(),
@@ -1945,5 +2154,350 @@ mod tests {
         store.reserve_mail_test("admin-test", 100).unwrap();
         assert!(store.reserve_mail_test("admin-test", 159).is_err());
         assert!(store.reserve_mail_test("another-admin", 101).is_ok());
+    }
+    async fn completed_job(api: &Api, id: &str) -> Value {
+        for _ in 0..2000 {
+            let status = api
+                .authorized(
+                    &request(api, Operation::JobStatus { id: id.into() }),
+                    "admin-test",
+                    Role::Administrator,
+                )
+                .await
+                .unwrap();
+            match status["status"]["state"].as_str().unwrap() {
+                "ready" => return status["status"]["result"].clone(),
+                "failed" | "cancelled" => panic!("job failed: {status}"),
+                _ => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+            }
+        }
+        panic!("job did not finish")
+    }
+    #[tokio::test]
+    async fn file_jobs_export_upload_inspect_and_restore_through_authorized_api() {
+        use base64::Engine;
+        let (_dir, api) = instance();
+        api.store.lock().unwrap().0.execute("INSERT INTO events(id,device,key,kind,health,message,created) VALUES(1,'removed','fan','alarm','\"critical\"','Original history',100)",[]).unwrap();
+        let export = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::BackupExportStart {
+                        password: "synthetic-backup-password".into(),
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let id = export["job"].as_str().unwrap();
+        completed_job(&api, id).await;
+        let mut download = request(&api, Operation::BackupDownload { id: id.into() });
+        assert!(api
+            .authorized(&download, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        download
+            .auth
+            .environment
+            .insert("REQUEST_METHOD".into(), "GET".into());
+        assert!(api
+            .authorized(&download, "viewer-test", Role::Viewer)
+            .await
+            .is_err());
+        assert!(api
+            .authorized(&download, "other-admin", Role::Administrator)
+            .await
+            .is_err());
+        let result = api
+            .authorized(&download, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        let (mut file, length, _) = api.jobs.open_download(id).unwrap();
+        assert_eq!(result["length"], length);
+        download
+            .auth
+            .environment
+            .insert("REQUEST_METHOD".into(), "HEAD".into());
+        let checked = api
+            .authorized(&download, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert_eq!(checked["length"], length);
+        assert!(api
+            .authorized(&download, "viewer-test", Role::Viewer)
+            .await
+            .is_err());
+        assert!(api
+            .authorized(&download, "other-admin", Role::Administrator)
+            .await
+            .is_err());
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes).unwrap();
+        let upload = api
+            .authorized(
+                &request(&api, Operation::BackupUploadStart),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let upload = upload["job"].as_str().unwrap();
+        for (index, part) in bytes.chunks(crate::jobs::UPLOAD_CHUNK).enumerate() {
+            api.authorized(
+                &request(
+                    &api,
+                    Operation::BackupUploadPart {
+                        id: upload.into(),
+                        offset: (index * crate::jobs::UPLOAD_CHUNK) as u64,
+                        data: base64::engine::general_purpose::STANDARD.encode(part),
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        }
+        api.authorized(
+            &request(
+                &api,
+                Operation::BackupInspectStart {
+                    id: upload.into(),
+                    bytes: length,
+                    password: "synthetic-backup-password".into(),
+                },
+            ),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        let inspected = completed_job(&api, upload).await;
+        assert_eq!(inspected["events"], 1);
+        let expected = inspected["expected_audit"].as_i64().unwrap();
+        let restore = || {
+            request(
+                &api,
+                Operation::BackupRestoreStart {
+                    id: upload.into(),
+                    expected_audit: expected,
+                    confirm: true,
+                },
+            )
+        };
+        api.authorized(&restore(), "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert_eq!(completed_job(&api, upload).await["restored"], true);
+        assert!(api
+            .authorized(&restore(), "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        assert_eq!(
+            api.store
+                .lock()
+                .unwrap()
+                .0
+                .query_row("SELECT message FROM events", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Original history"
+        );
+    }
+    #[tokio::test]
+    async fn cleanup_previews_expire_on_policy_changes_and_cancelled_jobs_are_not_confirmable() {
+        let (_dir, api) = instance();
+        let preview = api
+            .authorized(
+                &request(&api, Operation::CleanupPreview),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let id = preview["job"].as_str().unwrap();
+        completed_job(&api, id).await;
+        api.store
+            .lock()
+            .unwrap()
+            .save_retention(
+                &crate::retention::Settings {
+                    events_days: 0,
+                    hardware_logs_days: 0,
+                },
+                0,
+                "admin-test",
+            )
+            .unwrap();
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(
+                    &request(
+                        &api,
+                        Operation::CleanupRun {
+                            id: id.into(),
+                            confirm: true
+                        }
+                    ),
+                    "admin-test",
+                    Role::Administrator
+                )
+                .await
+                .unwrap_err()
+            ),
+            "retention_conflict"
+        );
+        api.authorized(
+            &request(&api, Operation::JobCancel { id: id.into() }),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            dsm::error_code(
+                &api.authorized(
+                    &request(
+                        &api,
+                        Operation::CleanupRun {
+                            id: id.into(),
+                            confirm: true
+                        }
+                    ),
+                    "admin-test",
+                    Role::Administrator
+                )
+                .await
+                .unwrap_err()
+            ),
+            "job_invalid"
+        );
+    }
+    #[tokio::test]
+    async fn automatic_cleanup_has_a_persisted_grace_period_and_daily_deadline() {
+        let (dir, api) = instance();
+        let due = api
+            .store
+            .lock()
+            .unwrap()
+            .0
+            .query_row(
+                "SELECT value FROM counters WHERE name='history_cleanup_due'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert!((crate::now() + 86395..=crate::now() + 86405).contains(&due));
+        assert!(!api.automatic_cleanup().unwrap());
+        let reopened = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened
+                .0
+                .query_row(
+                    "SELECT value FROM counters WHERE name='history_cleanup_due'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            due
+        );
+        {
+            let store = api.store.lock().unwrap();
+            store
+                .0
+                .execute(
+                    "UPDATE counters SET value=0 WHERE name='history_cleanup_due'",
+                    [],
+                )
+                .unwrap();
+            store.0.execute("INSERT INTO hardware_logs VALUES('removed','old','{\"fingerprint\":\"old\",\"message\":\"old log\",\"severity\":\"ok\",\"created\":\"2021-01-01T00:00:00Z\"}')",[]).unwrap();
+        }
+        assert!(api.automatic_cleanup().unwrap());
+        for _ in 0..2000 {
+            if !api.jobs.busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(!api.jobs.busy());
+        assert_eq!(
+            api.store
+                .lock()
+                .unwrap()
+                .0
+                .query_row("SELECT count(*) FROM hardware_logs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(!api.automatic_cleanup().unwrap());
+    }
+    #[tokio::test]
+    async fn restore_status_cancel_and_retention_guard_do_not_wait_for_application_store() {
+        let (_dir, api) = instance();
+        let owner = binding("admin-test", &auth());
+        let job = api.jobs.create(&owner, crate::jobs::Kind::Upload).unwrap();
+        api.jobs.upload(&job.id, &owner, 0, "eA==").unwrap();
+        api.jobs.uploaded(&job.id, &owner, 1).unwrap();
+        api.jobs
+            .run(job.clone(), "inspect", |_| Ok(json!({"expected_audit":0})))
+            .unwrap();
+        completed_job(&api, &job.id).await;
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, until) = std::sync::mpsc::channel();
+        let store = api.store.clone();
+        api.jobs
+            .run(job.clone(), "restore", move |job| {
+                let _guard = store.lock().unwrap();
+                started.send(()).unwrap();
+                let _ = until.recv_timeout(std::time::Duration::from_secs(2));
+                job.check()?;
+                Ok(Value::Null)
+            })
+            .unwrap();
+        ready
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(api.jobs.restoring());
+        let start = std::time::Instant::now();
+        assert_eq!(
+            api.authorized(
+                &request(&api, Operation::JobStatus { id: job.id.clone() }),
+                "admin-test",
+                Role::Administrator
+            )
+            .await
+            .unwrap()["status"]["state"],
+            "running"
+        );
+        let rejected = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::RetentionSave {
+                        settings: Default::default(),
+                        revision: 0,
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(dsm::error_code(&rejected), "backup_busy");
+        api.authorized(
+            &request(&api, Operation::JobCancel { id: job.id.clone() }),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        release.send(()).unwrap();
+        while api.jobs.busy() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(!api.jobs.restoring());
     }
 }

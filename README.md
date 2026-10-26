@@ -8,7 +8,7 @@ Due to thirdparty package limitations imposed by Synology, this package does not
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current build: 0.8.0-0041.** The Package Center title is **Hardware Monitor**.
+**Current build: 0.8.0-0043.** The Package Center title is **Hardware Monitor**.
 
 ## Features
 
@@ -18,7 +18,8 @@ You can choose if you want either, none or both.
 - Acknowledge known hardware faults with a reason: blue status, persistent suppression for email/desktop, automatic summary assessment and reactivation on recovery or worsening. [Acknowledgement rules](docs/ALARM-ACKNOWLEDGEMENT.md).
 - Independently configured SMTP email and native DSM desktop notifications, event filters and per-device delivery enablement. Editable templates, local timestamps and test actions.
 - Manually resend a recorded event to one saved email recipient, with a current-template preview and separate delivery history, without changing the alarm or original event. [Manual email replay](docs/MAIL-REPLAY.md).
-- Filtered full-history CSV, audited event clearing and password-encrypted backup/restore, including device/SMTP credentials. Restore pauses monitoring/delivery and cancels old pending jobs.
+- Separate configurable event/hardware-log retention (90-day defaults), daily and immediate cleanup with preview, and per-device hardware-log reading controls. [Retention rules](docs/HISTORY-RETENTION.md).
+- Filtered full-history CSV, audited event clearing and compressed, streaming, password-encrypted multi-GiB backup/restore, including device/SMTP credentials. Background jobs support progress/cancellation; restore pauses monitoring/delivery and cancels old pending jobs.
 - Optional data deletion in the DSM uninstall wizard. Data is retained by default; opt in to remove settings, credentials, history, keys and local upgrade backups. [Uninstall behavior](docs/UNINSTALL.md).
 - **German and English:** Automatic/Deutsch/English interface selection, separate saved languages for background channels, localized new event text/API messages/CSV headings and English documentation. Custom templates, vendor text and legacy event text are preserved.
 
@@ -61,6 +62,7 @@ English interface, using synthetic example data; no real credentials or private 
 - [Languages](docs/LANGUAGES.md)
 - [Notification channels](docs/NOTIFICATIONS.md), [SMTP/templates](docs/SMTP.md), [DSM desktop notifications](docs/DESKTOP-NOTIFICATIONS.md)
 - [Alarm grouping and multiple causes](docs/ALARM-GROUPING.md)
+- [History retention and cleanup](docs/HISTORY-RETENTION.md)
 - [CSV, clearing and backup/restore](docs/BACKUP-RESTORE.md)
 - [Development, local checks, SPK builds and GitHub releases](docs/DEVELOPMENT.md)
 - [DSM package architecture families](docs/PACKAGE-ARCHITECTURES.md)

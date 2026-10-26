@@ -12,6 +12,7 @@ local-dev = ["hyper/server"]
 
 [dependencies]
 anyhow = "1"
+flate2 = "1.1"
 aes-gcm = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
@@ -22,7 +23,7 @@ rand = "0.8"
 ring = "0.17"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup", "functions", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

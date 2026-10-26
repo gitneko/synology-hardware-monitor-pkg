@@ -59,3 +59,24 @@ Use a disposable test installation/dataset, with an encrypted app backup downloa
 5. Verify both the older JSON wizard on DSM 7.0–7.2.1 and the Vue wizard on DSM 7.2.2 or later. Local simulated rendering does not establish either native wizard's behavior.
 
 See [uninstall behavior and implementation](UNINSTALL.md).
+
+## Build 0042: retention, device log selection and large archives
+
+Use the new **Backup** page before manually cleaning important history. Existing installations receive 90-day event and hardware-log defaults, with a 24-hour review period before the first automatic cleanup. No NAS installation or production cleanup was performed by the agent.
+
+1. Upgrade to 0042. Check both independent periods, set/save each, and verify that a service restart preserves the automatic deadline. `0` disables age deletion only for the corresponding history type. The audit view should explain its fixed 10,000-entry cap.
+2. Create a complete encrypted backup of the existing large database before cleanup. Confirm progress, download through the native DSM window, private temporary-file cleanup and reasonable service/browser RAM use. Test cancelling an export and creating a fresh one.
+3. Preview cleanup, check both counts and the preserved-undated count, then explicitly confirm **Clean up now**. Confirm progress/cancellation and the audited outcome. SQLite's physical database file need not shrink; reclaimed pages are reused. Pending deliveries and active/acknowledged hardware faults must remain.
+4. In device settings test Disabled, All available and Newest N. Disabled must still collect hardware readings. Newest N requires chronological query support from that controller/firmware; unsupported queries must show incomplete coverage. Retention still applies to stored and newly fetched entries, even when N changes. Check that expired controller entries do not return after the next poll.
+5. On a disposable installation/dataset, upload/check the large archive, confirm restore, and verify exact history counts plus device/SMTP credentials under the destination key. Devices/channels must remain paused and old pending jobs cancelled. Also inspect a backup from a prior build. Exercise wrong-password, damaged-file, interrupted-upload and cancel-before-commit paths; keep the live dataset unchanged on failure.
+6. Refresh/reopen the page while a server job runs. Check session-bound resume/download, cancellation, one-hour expiry and explicit discarding of temporary backup jobs. Restart the service during a cancelled/incomplete job and confirm orphan files are removed.
+
+The local checks could not exercise DSM's CGI/socket/native lifecycle in this environment because socket creation is denied. The ordinary CI pipeline retains these integration checks; run them in an unrestricted development runner and complete this NAS acceptance before treating the build as production-accepted.
+
+
+## Build 0043: authenticated native backup download
+
+1. Upgrade and reopen the versioned 0043 app. Upgrade restarts the service and invalidates temporary jobs, so create a new backup.
+2. After completion, explicitly click **Download completed backup**. Verify that the browser saves `HardwareMonitor-backup.hmbackup` and that it can be inspected with the backup password. Test with DSM's CSRF protection enabled. A large file must still stream without loading the archive into JavaScript memory.
+3. With an expired DSM session or an expired/discarded job, verify that the app reports an error before initiating a download. An HTML or JSON error must never be offered as a successful backup file. Confirm the metadata check is `HEAD` with an empty body and that its content length matches the subsequent file.
+4. Repeat from the integrated DSM window and after revisiting a completed job. Cookie, administrator role and originating-session checks must still reject other users/sessions.
