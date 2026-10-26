@@ -287,14 +287,17 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         with socket.socket(socket.AF_UNIX) as mock:
             mock.bind(str(temp/"api.sock"));mock.listen(1);mock.settimeout(5)
             received=[]
-            def mock_reply():
+            def mock_reply(reply=None):
                 connection,_=mock.accept()
                 with connection:
                     header=connection.recv(4);length=struct.unpack(">I",header)[0]
-                    request=b""
-                    while len(request)<length:request+=connection.recv(length-len(request))
+                    request=bytearray()
+                    while len(request)<length:
+                        chunk=connection.recv(length-len(request))
+                        assert chunk, "incomplete API request"
+                        request.extend(chunk)
                     received.append(json.loads(request))
-                    payload=json.dumps({"ok":True,"code":"authenticated","data":{"secret":"must-never-leave"}}).encode()
+                    payload=json.dumps(reply if reply is not None else {"ok":True,"code":"authenticated","data":{"secret":"must-never-leave"}}).encode()
                     connection.sendall(struct.pack(">I",len(payload))+payload)
             worker=threading.Thread(target=mock_reply);worker.start()
             diagnostic=run("cgi",env=fake_env);worker.join(6)
@@ -330,13 +333,21 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             worker=threading.Thread(target=mock_reply);worker.start()
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
             assert not worker.is_alive() and received[-1]["operation"]==reset["operation"]
-            # A backup larger than the normal form limit crosses the CGI bridge;
+            # A backup above the old 24 MiB upload limit crosses the CGI bridge;
             # regular device forms retain their strict 128 KiB limit.
-            backup={"csrf":"synthetic-package-token","operation":{"action":"backup_inspect","file":"A"*(200*1024),"password":"synthetic-backup-password"}}
+            backup={"csrf":"synthetic-package-token","operation":{"action":"backup_inspect","file":"A"*(33*1024*1024),"password":"synthetic-backup-password"}}
             payload=json.dumps(backup).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
             worker=threading.Thread(target=mock_reply);worker.start()
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
             assert not worker.is_alive() and received[-1]["operation"]==backup["operation"]
+            # A download above the old 32 MiB response limit is returned intact.
+            export={"csrf":"synthetic-package-token","operation":{"action":"backup_export","password":"synthetic-backup-password"}}
+            payload=json.dumps(export).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
+            reply={"ok":True,"file":backup["operation"]["file"]}
+            worker=threading.Thread(target=mock_reply,args=(reply,));worker.start()
+            posted=run("cgi",env=post_env,password=payload);worker.join(6)
+            assert not worker.is_alive()
+            assert json.loads(posted.split(b"\r\n\r\n",1)[1])["file"]==reply["file"]
             body["operation"]["device"]["name"]="X"*(200*1024)
             payload=json.dumps(body).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
             rejected=run("cgi",env=post_env,password=payload)

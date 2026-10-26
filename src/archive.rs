@@ -14,8 +14,9 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, num::NonZeroU32};
 use zeroize::{Zeroize, Zeroizing};
-pub const MAX_PLAIN: usize = 16 * 1024 * 1024;
-pub const MAX_FILE: usize = 24 * 1024 * 1024;
+// Archives are held in memory; keep a finite bound while allowing retained history.
+pub const MAX_PLAIN: usize = 128 * 1024 * 1024;
+pub const MAX_FILE: usize = 192 * 1024 * 1024;
 const HEADER: &[u8] = b"HWMON-BACKUP-1\n";
 const ITERATIONS: u32 = 600_000;
 const TABLES: &[(&str,&str)]=&[
@@ -553,6 +554,38 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_retained_history_exports_and_restores_above_previous_limits() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let source_vault = Vault::open(&source.path().join("master.key")).unwrap();
+        let target_vault = Vault::open(&target.path().join("master.key")).unwrap();
+        let source_store = Store::open(source.path()).unwrap();
+        // Enough history to exceed both the old 16 MiB payload limit and the
+        // old 24 MiB file / 32 MiB CGI response limits after Base64 encoding.
+        let message = "synthetic retained history ".repeat(26 * 1024 * 1024 / 27 + 1);
+        source_store.0.execute(
+            "INSERT INTO events(id,device,key,kind,health,message,created) VALUES(1,'removed','drive','alarm','\"critical\"',?1,100)",
+            params![message],
+        ).unwrap();
+        let archive = source_store.make_archive(&source_vault).unwrap();
+        let file = encrypt(&archive, "synthetic-backup-password").unwrap();
+        assert!(file.len() > 32 * 1024 * 1024);
+        assert!(file.len() < MAX_FILE);
+        let decoded = decrypt(&file, "synthetic-backup-password").unwrap();
+        assert_eq!(decoded.summary()["events"], 1);
+        let mut target_store = Store::open(target.path()).unwrap();
+        target_store
+            .restore_archive(&decoded, &target_vault, "admin", 0)
+            .unwrap();
+        let restored: String = target_store
+            .0
+            .query_row("SELECT message FROM events WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(restored, message);
+    }
     #[test]
     fn replay_history_roundtrips_but_pending_jobs_and_drafts_never_resume_and_format_three_still_loads(
     ) {

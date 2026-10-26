@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use hardware_monitor::{
-    api::{Api, Operation, Request, WriteBody, MAX_REQUEST},
+    api::{Api, Operation, Request, WriteBody, MAX_REQUEST, MAX_RESPONSE},
     collector::Redfish,
     dsm::{self, AuthContext},
     model::Device,
@@ -457,7 +457,7 @@ async fn cgi(socket: &Path) -> Result<()> {
             .await
             .context(dsm::BoundaryError("api_transport_failed"))? as usize;
         anyhow::ensure!(
-            length <= 32 * 1024 * 1024,
+            length <= MAX_RESPONSE,
             dsm::BoundaryError("api_response_invalid")
         );
         let mut bytes = vec![0u8; length];

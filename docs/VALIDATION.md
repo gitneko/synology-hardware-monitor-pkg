@@ -152,3 +152,26 @@ Dell PowerEdge R420/iDRAC7, R330/iDRAC8 and R340/iDRAC9 have been tested as desc
 ## Build 0018 release automation
 
 The publisher is exercised with a fake GitHub client: first publish, replacement, source-tag movement, managed-only cleanup, stale commits, immutable releases, checksum/commit mismatch and interrupted uploads. It does not call a live repository during these tests. A hosted Actions run and actual release update remain unverified until the project is pushed to GitHub. The source repository currently has no remote. README screenshots use the production frontend against the read-only synthetic fixture.
+
+
+## Build 0040: larger encrypted app backups
+
+The 0.8.0 master-based change raises the logical archive limit to 128 MiB and the
+file limit to 192 MiB, updates both language catalogs and the upload picker, and
+derives the CGI response bound from the archive file bound. The encrypted format
+remains 4; the existing legacy-format migration tests still pass.
+
+Local checks on 26 October 2026: 130 Rust tests, 45 frontend tests and 19 Python
+tests pass; rustfmt, Clippy for normal and local-dev features, the Vue production
+build and the generic x86-64 static musl release build pass. The new regression
+exports, authenticates, decrypts and restores approximately 26 MiB of retained
+history without losing its contents; the Base64 file exceeds the old 32 MiB CGI
+response bound as well as the old 16/24 MiB archive bounds. A separate debug-test
+process peaked at 215,152 KiB RSS in 10.61 seconds; this measures that synthetic
+fixture only, not maximum-size archives or NAS performance.
+
+The CGI integration regression now forwards a 33 MiB upload and checks an intact
+33 MiB download while retaining rejection of ordinary forms over 128 KiB. These
+socket-based checks could not run in this restricted environment: TCP socket
+creation and Unix socket binding both return EPERM. Package lifecycle verification
+and target NAS upload/download acceptance therefore remain pending.

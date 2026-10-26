@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 use zeroize::Zeroize;
 
 pub const MAX_REQUEST: usize = crate::archive::MAX_FILE + 16384;
+// A backup export must fit through the CGI response as well as the upload path.
+pub const MAX_RESPONSE: usize = crate::archive::MAX_FILE + 16384;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -841,7 +843,7 @@ pub fn message(code: &str) -> &'static str {
         "backup_password_invalid"=>"Das Sicherungspasswort muss mindestens 12 Zeichen und höchstens 1024 UTF-8-Bytes lang sein.",
         "backup_busy"=>"Eine Sicherungsaktion läuft bereits. Bitte kurz warten.",
         "backup_invalid"=>"Sicherungsdatei oder Passwort ungültig. Es wurden keine Daten geändert.",
-        "backup_too_large"=>"Die Sicherung überschreitet das derzeitige Limit von 16 MiB Nutzdaten / 24 MiB Datei.",
+        "backup_too_large"=>"Die Sicherung überschreitet das derzeitige Limit von 128 MiB Nutzdaten / 192 MiB Datei.",
         "backup_conflict"=>"Seit der Prüfung wurden Einstellungen geändert. Bitte die Sicherung erneut prüfen.",
         "backup_restore_failed"=>"Wiederherstellung abgewiesen. Datei, Datenformat und zwischenzeitliche Änderungen prüfen; der bisherige Datenbestand bleibt erhalten.",
         "maintenance_confirmation_required"=>"Bitte die Aktion ausdrücklich bestätigen.",
