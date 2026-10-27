@@ -1,0 +1,108 @@
+diff --git a/src/notification/handlers.rs b/src/notification/handlers.rs
+index 7b8ef79..b4d6b46 100644
+--- a/src/notification/handlers.rs
++++ b/src/notification/handlers.rs
+@@ -239,6 +239,22 @@ impl super::NotificationReceiver {
+         data: Bytes,
+         source: SocketAddr,
+         response_source: Option<DestinationMetadata>,
++    ) -> Result<Option<ReceivedNotification>> {
++        self.handle_v3_with_remote_engines(
++            data,
++            source,
++            response_source,
++            &self.inner.remote_engines,
++        )
++        .await
++    }
++
++    pub(super) async fn handle_v3_with_remote_engines(
++        &self,
++        data: Bytes,
++        source: SocketAddr,
++        response_source: Option<DestinationMetadata>,
++        remote_engines: &std::sync::Mutex<crate::v3::process::RemoteEngineTable>,
+     ) -> Result<Option<ReceivedNotification>> {
+         let (our_boots, our_time) = super::unpack_boots_time(
+             self.inner
+@@ -260,9 +276,7 @@ impl super::NotificationReceiver {
+             mpd: None,
+             source,
+         };
+-        let role = V3Role::Receiver {
+-            remote_engines: &self.inner.remote_engines,
+-        };
++        let role = V3Role::Receiver { remote_engines };
+ 
+         let inbound = match process_v3_inbound(data, &usm_ctx, &role)? {
+             V3Inbound::Failed { failure, report } => {
+diff --git a/src/notification/mod.rs b/src/notification/mod.rs
+index ff26e82..3f38fef 100644
+--- a/src/notification/mod.rs
++++ b/src/notification/mod.rs
+@@ -1514,6 +1514,47 @@ const fn unpack_boots_time(packed: u64) -> (u32, u32) {
+ }
+ 
+ impl NotificationReceiver {
++    /// Authenticate and decode a remote authPriv trap as a polling hint only.
++    ///
++    /// This explicitly does NOT establish freshness: a replay may pass. It
++    /// runs the normal crypto, strict PDU and acceptance-policy checks with a
++    /// disposable remote clock. No live replay state is read or changed, no
++    /// notification contents are returned, and local-authoritative messages
++    /// and reportable messages are excluded. Callers must opt in per sender,
++    /// approve identity/source separately, and bound the resulting polls.
++    pub async fn authenticated_trap_poll_hint(
++        &self,
++        data: Bytes,
++        source: SocketAddr,
++    ) -> Result<bool> {
++        use crate::message::{RawV3Message, SecurityLevel};
++        if data.len() > self.inner.max_message_size {
++            return Ok(false);
++        }
++        let raw = RawV3Message::decode(data.clone(), self.inner.decode_config)?.value;
++        if raw.security_level() != SecurityLevel::AuthPriv
++            || raw.global_data().msg_flags().reportable
++        {
++            return Ok(false);
++        }
++        let usm = crate::v3::UsmSecurityParams::decode(
++            raw.security_params().clone(),
++            self.inner.decode_config,
++        )?
++        .value;
++        if usm.engine_id() == &self.inner.engine_id {
++            return Ok(false);
++        }
++        let _guard = self.inner.recv_gate.lock().await;
++        let clocks = Mutex::new(RemoteEngineTable::new(1));
++        Ok(self
++            .handle_v3_with_remote_engines(data, source, None, &clocks)
++            .await?
++            .is_some_and(|received| {
++                !received.notification.is_confirmed() && received.inform_ack.is_none()
++            }))
++    }
++
+     /// Import independently authenticated remote state without resetting a
+     /// newer receiver baseline. Callers must approve the sender identity first.
+     pub fn seed_authenticated_remote(&self, state: crate::v3::EngineState) -> Result<()> {
+@@ -1523,10 +1564,13 @@ impl NotificationReceiver {
+         }
+         let mut table = self.inner.remote_engines.lock().unwrap();
+         let key = state.engine_id().clone();
+-        if table.update(&key, |current| {
+-            current.merge_from(&state);
+-            ((), Instant::now())
+-        }).is_none() {
++        if table
++            .update(&key, |current| {
++                current.merge_from(&state);
++                ((), Instant::now())
++            })
++            .is_none()
++        {
+             table.insert(key, state, Instant::now());
+         }
+         Ok(())

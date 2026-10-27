@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and start the complete local app without DSM or an SPK."""
+"""Build and start the complete local app with Redfish/SNMP, without DSM or an SPK."""
 import argparse
 import os
 from pathlib import Path

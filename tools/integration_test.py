@@ -353,6 +353,8 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             expected=json.loads(json.dumps(body["operation"]))
             expected["device"]["tls_profile"]="standard"
             expected["device"]["hardware_log"]={"mode":"all"}
+            snmp_defaults=dict(primary_protocol="redfish",snmp_poll=None,snmp_traps=None,snmp_secrets={"snmp_poll":{"action":"keep"},"snmp_traps":{"action":"keep"}})
+            expected["device"].update(snmp_defaults)
             assert forwarded["csrf"]==body["csrf"] and forwarded["operation"]==expected
             assert forwarded["auth"]["environment"]["HTTP_ORIGIN"]==post_env["HTTP_ORIGIN"]
             assert forwarded["auth"]["environment"]["HTTPS"]=="on"
@@ -363,7 +365,19 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             payload=json.dumps(pinned).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
             worker=threading.Thread(target=mock_reply);worker.start()
             posted=run("cgi",env=post_env,password=payload);worker.join(6)
-            assert not worker.is_alive() and received[-1]["operation"]==pinned["operation"]
+            pinned_expected=json.loads(json.dumps(pinned["operation"]))
+            pinned_expected["device"].update(snmp_defaults)
+            assert not worker.is_alive() and received[-1]["operation"]==pinned_expected
+            # Protocol configuration and secret actions survive the same typed bridge.
+            snmp_body={"csrf":body["csrf"],"operation":{"action":"save","device":{"id":None,"revision":None,"name":"Synthetic SNMP","primary_protocol":"snmp","snmp_poll":{"host":"::1","security":{"version":"v1"}},"snmp_secrets":{"snmp_poll":{"action":"replace","credentials":{"kind":"community","community":"synthetic-snmp-community"}}},"interval_seconds":60,"repeat_seconds":None,"alerts_enabled":False,"enabled":False}}}
+            payload=json.dumps(snmp_body).encode();post_env["CONTENT_LENGTH"]=str(len(payload))
+            worker=threading.Thread(target=mock_reply);worker.start()
+            posted=run("cgi",env=post_env,password=payload);worker.join(6)
+            assert not worker.is_alive()
+            forwarded_device=received[-1]["operation"]["device"]
+            assert forwarded_device["primary_protocol"]=="snmp" and forwarded_device["endpoint"]==""
+            assert forwarded_device["snmp_poll"]["security"]=={"version":"v1"}
+            assert forwarded_device["snmp_secrets"]=={"snmp_poll":snmp_body["operation"]["device"]["snmp_secrets"]["snmp_poll"],"snmp_traps":{"action":"keep"}}
             # Explicit, incident-bound reset survives the same CGI bridge.
             reset={"csrf":"synthetic-package-token","operation":{"action":"alarm_reset","id":"synthetic-device","revision":1,"key":"/redfish/v1/Chassis/1/Power/#PowerSupplies/1","token":"synthetic-incident-token","confirm":True}}
             payload=json.dumps(reset).encode();post_env["CONTENT_LENGTH"]=str(len(payload))

@@ -8,6 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]/'web/dist'
 NOW = int(time.time())
@@ -21,7 +22,7 @@ OBSERVATIONS = [
     {'key': 'fan', 'label': 'System Fan 1', 'health': 'ok', 'reading': 4800, 'unit': 'RPM'},
 ]
 SELECTION = {key: True for key in ['critical', 'warning', 'recovery', 'repeat', 'hardware_log']}
-DATA = {'version': '0.8.0', 'generated': NOW, 'user': {'name': 'demo-admin', 'role': 'administrator'},
+DATA = {'version': tomllib.loads((ROOT.parents[1]/'Cargo.toml').read_text())['package']['version'], 'generated': NOW, 'user': {'name': 'demo-admin', 'role': 'administrator'},
         'csrf': 'synthetic-ui-proof', 'notifications': {'mail_enabled': True, 'desktop_enabled': True,
         'desktop_self_test_available': True}, 'audit': [],
         'devices': [{'device': DEVICE, 'revision': 1, 'last_poll': NOW, 'stale': False,

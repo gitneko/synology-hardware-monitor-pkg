@@ -10,6 +10,6 @@ export async function administer(dashboard,operation,request=fetch,signal) {
   });
   let body;
   try{body=await response.json();}catch{throw new Error(t("DSM hat keine gültige Antwort geliefert. Bitte aktualisieren und erneut versuchen."));}
-  if(!response.ok || body.ok!==true)throw new Error(body.error||t("Die Änderung wurde nicht bestätigt. Bitte aktualisieren."));
+  if(!response.ok || body.ok!==true){const error=new Error(body.error||t("Die Änderung wurde nicht bestätigt. Bitte aktualisieren."));error.code=body.code;throw error;}
   return body;
 }

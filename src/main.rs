@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use hardware_monitor::{
     api::{Api, Operation, Request, WriteBody, MAX_REQUEST, MAX_RESPONSE},
-    collector::Redfish,
     dsm::{self, AuthContext},
-    model::Device,
+    model::{Device, PrimaryProtocol},
     now,
     store::Store,
     vault::{self, Vault},
@@ -53,6 +52,9 @@ enum Command {
     DevicePut {
         #[arg(long)]
         file: PathBuf,
+        /// Read a JSON credential document on stdin instead of a Redfish password.
+        #[arg(long)]
+        protocol_secrets: bool,
     },
     /// Check HTTPS and Redfish login without changing the device. Password from stdin.
     DeviceTest {
@@ -65,6 +67,8 @@ enum Command {
         file: PathBuf,
     },
     Snapshot,
+    /// Prepare or migrate private state without starting monitoring or delivery.
+    Initialize,
     Backup {
         #[arg(long)]
         directory: PathBuf,
@@ -122,21 +126,83 @@ async fn main() -> Result<()> {
         return cgi(&cli.socket).await;
     }
     if let Command::Service { action, notify_dsm } = &cli.command {
-        return service(&cli, action, *notify_dsm).await;
+        match service(&cli, action, *notify_dsm).await {
+            Ok(running) => {
+                if action == "status" && !running {
+                    // DSM distinguishes stopped (3) from a dead process (1).
+                    std::process::exit(3);
+                }
+                return Ok(());
+            }
+            Err(error) if action == "status" => {
+                eprintln!("{error:#}");
+                std::process::exit(4); // DSM: status could not be determined.
+            }
+            Err(error) => return Err(error),
+        }
     }
     vault::private_dir(&cli.state)?;
     anyhow::ensure!(
         !cli.state.join("monitor.db").exists() || cli.state.join("master.key").exists(),
         "master key missing for existing database; restore key backup"
     );
-    let vault = Arc::new(Vault::open(&cli.state.join("master.key"))?);
-    let mut store = Store::open(&cli.state)?;
+    let vault = Arc::new(
+        Vault::open(&cli.state.join("master.key")).context("open private credential key")?,
+    );
+    let mut store = Store::open(&cli.state).context("initialize package database")?;
     match cli.command {
-        Command::DevicePut { file } => {
+        Command::DevicePut {
+            file,
+            protocol_secrets,
+        } => {
             let d: Device = serde_json::from_slice(&std::fs::read(file)?)?;
             d.validate()?;
-            let secret = vault::read_secret()?;
-            store.put(&d, &vault.seal(&d.id, &secret)?)?;
+            use hardware_monitor::snmp::{
+                persistence::prepare_secrets, secrets::DeviceCredentialsInput,
+            };
+            let input = if protocol_secrets {
+                DeviceCredentialsInput::read()?
+            } else {
+                anyhow::ensure!(
+                    d.primary_protocol == PrimaryProtocol::Redfish,
+                    "SNMP configuration requires --protocol-secrets JSON on stdin"
+                );
+                DeviceCredentialsInput {
+                    redfish_password: Some(std::str::from_utf8(&vault::read_secret()?)?.to_owned()),
+                    snmp: Default::default(),
+                }
+            };
+            let existing = store.get(&d.id)?;
+            let secret = if d.primary_protocol == PrimaryProtocol::Snmp {
+                anyhow::ensure!(
+                    input.redfish_password.is_none(),
+                    "SNMP primary must not carry a Redfish password"
+                );
+                Vec::new()
+            } else if let Some(password) = &input.redfish_password {
+                anyhow::ensure!(
+                    !password.is_empty() && password.len() <= 4096,
+                    "invalid Redfish password"
+                );
+                vault.seal(&d.id, password.as_bytes())?
+            } else {
+                let (old, secret, _) = existing.as_ref().context("Redfish password required")?;
+                anyhow::ensure!(
+                    old.primary_protocol == d.primary_protocol
+                        && old.endpoint == d.endpoint
+                        && old.username == d.username,
+                    "Redfish password replacement required"
+                );
+                secret.clone()
+            };
+            let credentials = prepare_secrets(&store, &vault, &d, &input.snmp)?;
+            store.save_admin_with_snmp(
+                &d,
+                &secret,
+                existing.map(|v| v.2),
+                "local-cli",
+                Some(&credentials),
+            )?;
             println!("Device {} saved", d.id);
         }
         Command::MailTest { file } => {
@@ -170,10 +236,18 @@ async fn main() -> Result<()> {
         Command::DeviceTest { file } => {
             let d: Device = serde_json::from_slice(&std::fs::read(file)?)?;
             d.validate()?;
-            let secret = vault::read_secret()?;
-            let result = Redfish::new(&d)?
-                .probe(&d.username, std::str::from_utf8(&secret)?)
-                .await?;
+            let secret = if d.primary_protocol == PrimaryProtocol::Snmp {
+                let input = hardware_monitor::snmp::secrets::DeviceCredentialsInput::read()?;
+                let hardware_monitor::snmp::secrets::SecretUpdate::Replace { credentials } =
+                    &input.snmp.snmp_poll
+                else {
+                    anyhow::bail!(hardware_monitor::dsm::BoundaryError("snmp_credentials"));
+                };
+                zeroize::Zeroizing::new(serde_json::to_vec(credentials)?)
+            } else {
+                vault::read_secret()?
+            };
+            let result = hardware_monitor::collector::probe(&d, &secret).await?;
             println!("{}", serde_json::to_string(&result)?);
         }
         Command::Backup { directory } => {
@@ -188,13 +262,14 @@ async fn main() -> Result<()> {
             println!("Private backup saved");
         }
         Command::Snapshot => println!("{}", serde_json::to_string_pretty(&store.dashboard()?)?),
+        Command::Initialize => println!("Private state initialized"),
         Command::PollOnce => {
             let mut failed = false;
-            for (device, secret) in store.devices()? {
+            for (device, secret, revision, epoch) in store.poll_targets()? {
                 if !device.enabled {
                     continue;
                 }
-                if let Err(e) = poll(&mut store, &vault, &device, &secret).await {
+                if let Err(e) = poll(&mut store, &vault, &device, &secret, revision, epoch).await {
                     failed = true;
                     eprintln!("{}: {e}", device.id);
                 }
@@ -214,21 +289,28 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn collect(
+async fn poll(
+    store: &mut Store,
     vault: &Vault,
     d: &Device,
     encrypted: &[u8],
-) -> Result<hardware_monitor::model::Snapshot> {
-    let secret = vault.unseal(&d.id, encrypted)?;
-    Redfish::new(d)?
-        .poll(&d.username, std::str::from_utf8(&secret)?)
-        .await
-}
-async fn poll(store: &mut Store, vault: &Vault, d: &Device, encrypted: &[u8]) -> Result<()> {
-    match collect(vault, d, encrypted).await {
-        Ok(snapshot) => store.apply(d, &snapshot, now()),
+    revision: i64,
+    epoch: i64,
+) -> Result<()> {
+    let started = store.trap_sequence(&d.id)?;
+    match hardware_monitor::collector::collect(vault, d, encrypted).await {
+        Ok(snapshot) => store
+            .apply_poll(
+                d,
+                &snapshot,
+                now(),
+                Some(revision),
+                Some(epoch),
+                Some(started),
+            )
+            .map(|_| ()),
         Err(e) => {
-            store.poll_failure_revision(d, now(), None, &e)?;
+            store.poll_failure_epoch(d, now(), revision, epoch, &e)?;
             Err(e)
         }
     }
@@ -258,10 +340,17 @@ async fn serve(
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
         "daemon already running"
     );
-    std::fs::write(state.join("daemon.pid"), std::process::id().to_string())?;
     let development = local.is_some();
     let store = Arc::new(Mutex::new(store));
-    let api_service = Arc::new(Api::new(store.clone(), vault.clone()));
+    let api_service = Api::new(store.clone(), vault.clone());
+    let snmp_receiver = hardware_monitor::snmp::receiver::Service::start_with_submission_gate(
+        &state,
+        store.clone(),
+        vault.clone(),
+        api_service.submission_gate(),
+    );
+    let snmp_control = snmp_receiver.controller.clone();
+    let api_service = Arc::new(api_service.with_snmp_receiver(snmp_control.clone()));
     let worker_api = api_service.clone();
     let mut api = if !development {
         if socket.exists() {
@@ -284,6 +373,7 @@ async fn serve(
     };
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let snmp_poller = Arc::new(hardware_monitor::snmp::polling::Poller::default());
     let mut due = HashMap::<String, (i64, Instant)>::new();
     let mut running = HashSet::new();
     let mut jobs = JoinSet::new();
@@ -293,6 +383,8 @@ async fn serve(
     let mut next_reap = Instant::now() + Duration::from_secs(60);
     let mut next_maintenance = Instant::now() + Duration::from_secs(60);
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // Publish readiness only after the listener and shutdown handler exist.
+    std::fs::write(state.join("daemon.pid"), std::process::id().to_string())?;
     eprintln!("hardware-monitor started; legacy sysnotify delivery enabled={notify}; SMTP/desktop follow saved channel settings");
     loop {
         tokio::select! {
@@ -314,20 +406,29 @@ async fn serve(
                     next_maintenance=Instant::now()+Duration::from_secs(60);
                 }
                 if worker_api.jobs.restoring() { continue; }
-                let devices=store.lock().unwrap().versioned_devices()?;
-                for (device,secret,revision) in devices {
+                let mut devices=store.lock().unwrap().poll_targets()?;
+                // A trap storm must not let early devices repeatedly take all
+                // four slots while another device's ordinary poll is overdue.
+                devices.sort_by_key(|(d,_,revision,_)|due.get(&d.id).is_some_and(|(r,t)|r==revision&&*t>Instant::now()));
+                let valid=devices.iter().filter(|(d,_,_,_)|d.enabled && d.primary_protocol==PrimaryProtocol::Snmp).map(|(d,_,_,_)|d.id.clone()).collect();
+                snmp_poller.retain(&valid);
+                due.retain(|id,_|devices.iter().any(|(d,_,_,_)|&d.id==id));
+                for (device,secret,revision,epoch) in devices {
                     if jobs.len()>=4 {break;}
-                    if !device.enabled || running.contains(&device.id) || due.get(&device.id).is_some_and(|(r,t)|*r==revision && *t>Instant::now()) {continue;}
+                    if !device.enabled || running.contains(&device.id) || (due.get(&device.id).is_some_and(|(r,t)|*r==revision && *t>Instant::now()) && !snmp_control.urgent_due(&device.id,revision,epoch)) {continue;}
                     running.insert(device.id.clone());
-                    let vault=vault.clone(); let store=store.clone(); let api=worker_api.clone();
+                    snmp_control.poll_started(&device.id,revision,epoch);
+                    let started=store.lock().unwrap().trap_sequence(&device.id)?;
+                    let vault=vault.clone(); let store=store.clone(); let snmp_poller=snmp_poller.clone(); let api=worker_api.clone();
                     jobs.spawn(async move {
-                        let snapshot=collect(&vault,&device,&secret).await;
-                        if api.jobs.restoring() { return (device.id,revision,device.interval_seconds); }
+                        let snapshot=hardware_monitor::collector::collect_with_runtime(&vault,&device,&secret,&snmp_poller,revision,epoch).await;
+                        let interval=if device.primary_protocol==PrimaryProtocol::Snmp {snmp_poller.delay(&device.id,device.interval_seconds).await}else{device.interval_seconds};
+                        if api.jobs.restoring() { return (device.id,revision,interval); }
                         let mut s=store.lock().unwrap();
-                        if api.jobs.restoring() { return (device.id,revision,device.interval_seconds); }
-                        let applied=match snapshot {Ok(snapshot)=>s.apply_revision(&device,&snapshot,now(),Some(revision)),Err(error)=>{eprintln!("device {}: {}",device.id,hardware_monitor::collector::poll_failure_label(&error));s.poll_failure_revision(&device,now(),Some(revision),&error)}};
+                        if api.jobs.restoring() { return (device.id,revision,interval); }
+                        let applied=match snapshot {Ok(snapshot)=>s.apply_poll(&device,&snapshot,now(),Some(revision),Some(epoch),Some(started)),Err(error)=>{eprintln!("device {}: {}",device.id,hardware_monitor::collector::poll_failure_label(&error));s.poll_failure_epoch(&device,now(),revision,epoch,&error)}};
                         if applied.is_err() {eprintln!("device {}: database update failed",device.id);}
-                        (device.id,revision,device.interval_seconds)
+                        (device.id,revision,interval)
                     });
                 }
                 if !notify && delivery.is_empty() && Instant::now()>=next_delivery {
@@ -350,6 +451,7 @@ async fn serve(
         }
     }
     worker_api.jobs.shutdown();
+    snmp_receiver.stop().await;
     jobs.abort_all();
     delivery.abort_all();
     api.abort();
@@ -619,44 +721,47 @@ async fn cgi(socket: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn service(cli: &Cli, action: &str, notify: bool) -> Result<()> {
+async fn live_service_pid(cli: &Cli) -> Option<i32> {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(cli.state.join("daemon.lock"))
+        .ok()?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return None;
+    }
+    if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {
+        return None;
+    }
+    let pid = std::fs::read_to_string(cli.state.join("daemon.pid"))
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    if pid <= 1 {
+        return None;
+    }
+    // File capabilities can make /proc/PID/exe unreadable even to the same
+    // UID. Authenticate the actual API listener with kernel peer credentials
+    // instead of weakening dumpability or trusting a PID file alone.
+    let stream = tokio::time::timeout(Duration::from_millis(200), UnixStream::connect(&cli.socket))
+        .await
+        .ok()?
+        .ok()?;
+    let peer = stream.peer_cred().ok()?;
+    if peer.pid()? != pid || peer.uid() != unsafe { libc::geteuid() } {
+        return None;
+    }
+    Some(pid)
+}
+
+async fn service(cli: &Cli, action: &str, notify: bool) -> Result<bool> {
     vault::private_dir(&cli.state)?;
-    let pid_path = cli.state.join("daemon.pid");
-    let live_pid = || -> Option<i32> {
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(cli.state.join("daemon.lock"))
-            .ok()?;
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return None;
-        }
-        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {
-            return None;
-        }
-        let pid = std::fs::read_to_string(&pid_path)
-            .ok()?
-            .trim()
-            .parse::<i32>()
-            .ok()?;
-        if pid <= 1 {
-            return None;
-        }
-        if std::fs::read_link(format!("/proc/{pid}/exe")).ok()? != std::env::current_exe().ok()? {
-            return None;
-        }
-        let owner = std::fs::metadata(format!("/proc/{pid}")).ok()?;
-        use std::os::unix::fs::MetadataExt;
-        if owner.uid() != unsafe { libc::geteuid() } {
-            return None;
-        }
-        Some(pid)
-    };
     match action {
-        "status" => anyhow::ensure!(live_pid().is_some(), "daemon stopped"),
+        "status" => return Ok(live_service_pid(cli).await.is_some()),
         "start" => {
-            if live_pid().is_some() {
-                return Ok(());
+            if live_service_pid(cli).await.is_some() {
+                return Ok(true);
             }
             let log = OpenOptions::new()
                 .append(true)
@@ -685,27 +790,31 @@ async fn service(cli: &Cli, action: &str, notify: bool) -> Result<()> {
                 });
             }
             let mut child = cmd.spawn()?;
-            for _ in 0..50 {
+            // Direct upgrades back up and migrate schema 1 before serve()
+            // publishes its PID/socket. Allow slower or temporarily busy NASes.
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while Instant::now() < deadline {
                 if child.try_wait()?.is_some() {
                     anyhow::bail!("daemon startup failed; see private service.log");
                 }
-                if live_pid().is_some() && cli.socket.exists() {
-                    return Ok(());
+                if live_service_pid(cli).await.is_some() {
+                    return Ok(true);
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             child.kill()?;
-            anyhow::bail!("daemon startup timeout");
+            let _ = child.wait();
+            anyhow::bail!("daemon startup timeout after 120 seconds; see private service.log");
         }
         "stop" => {
-            if let Some(pid) = live_pid() {
+            if let Some(pid) = live_service_pid(cli).await {
                 anyhow::ensure!(
                     unsafe { libc::kill(pid, libc::SIGTERM) } == 0,
                     "failed to stop daemon"
                 );
                 for _ in 0..100 {
-                    if live_pid().is_none() {
-                        return Ok(());
+                    if live_service_pid(cli).await.is_none() {
+                        return Ok(false);
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -714,7 +823,7 @@ async fn service(cli: &Cli, action: &str, notify: bool) -> Result<()> {
         }
         _ => unreachable!(),
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -774,5 +883,78 @@ mod download_tests {
         assert!(receive_attachment(&mut receiver, &mut response, 4, false)
             .await
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::*;
+
+    // Executed in a separate process by the test below: dumpability is never
+    // changed in the test runner or in the production daemon.
+    #[test]
+    #[ignore]
+    fn protected_daemon_fixture() {
+        let Some(directory) = std::env::var_os("HM_PROTECTED_DAEMON_TEST") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join("daemon.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let listener = std::os::unix::net::UnixListener::bind(directory.join("api.sock")).unwrap();
+        assert_eq!(unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) }, 0);
+        std::fs::write(directory.join("daemon.pid"), std::process::id().to_string()).unwrap();
+        for connection in listener.incoming() {
+            drop(connection.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_daemon_identity_uses_kernel_peer_not_proc_or_pid_file_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = Cli {
+            state: directory.path().into(),
+            socket: directory.path().join("api.sock"),
+            command: Command::Service {
+                action: "status".into(),
+                notify_dsm: false,
+            },
+        };
+        assert!(live_service_pid(&cli).await.is_none());
+        let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "service_tests::protected_daemon_fixture",
+            ])
+            .env("HM_PROTECTED_DAEMON_TEST", directory.path())
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap() as i32;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live_service_pid(&cli).await != Some(pid) {
+            assert!(Instant::now() < deadline, "protected daemon not detected");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Pointing the file at a different live process must not authorize a
+        // signal to it, even while the real daemon still holds the lock.
+        std::fs::write(cli.state.join("daemon.pid"), std::process::id().to_string()).unwrap();
+        assert!(live_service_pid(&cli).await.is_none());
+        std::fs::write(cli.state.join("daemon.pid"), pid.to_string()).unwrap();
+        assert_eq!(live_service_pid(&cli).await, Some(pid));
+        assert!(!service(&cli, "stop", false).await.unwrap());
+        assert!(live_service_pid(&cli).await.is_none());
+        drop(child);
     }
 }

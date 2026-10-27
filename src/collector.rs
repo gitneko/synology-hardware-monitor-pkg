@@ -10,6 +10,95 @@ use url::Url;
 const MAX_BODY: usize = 2 * 1024 * 1024;
 const MAX_RESOURCES: usize = 256;
 
+pub async fn collect(
+    vault: &crate::vault::Vault,
+    device: &Device,
+    encrypted: &[u8],
+) -> Result<Snapshot> {
+    collect_with_runtime(
+        vault,
+        device,
+        encrypted,
+        &crate::snmp::polling::Poller::default(),
+        0,
+        0,
+    )
+    .await
+}
+
+/// `encrypted` belongs to the selected primary protocol and its vault purpose.
+pub fn collect_with_runtime<'a>(
+    vault: &'a crate::vault::Vault,
+    device: &'a Device,
+    encrypted: &'a [u8],
+    poller: &'a crate::snmp::polling::Poller,
+    revision: i64,
+    epoch: i64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Snapshot>> + Send + 'a>> {
+    Box::pin(async move {
+        match device.primary_protocol {
+            PrimaryProtocol::Redfish => {
+                let password = vault.unseal(&device.id, encrypted)?;
+                Redfish::new(device)?
+                    .poll(&device.username, std::str::from_utf8(&password)?)
+                    .await
+            }
+            PrimaryProtocol::Snmp => {
+                let plain = vault
+                    .unseal(
+                        &crate::snmp::secrets::Purpose::SnmpPoll.aad(&device.id),
+                        encrypted,
+                    )
+                    .context(crate::dsm::BoundaryError("snmp_credentials"))?;
+                let credentials =
+                    serde_json::from_slice::<crate::snmp::secrets::Credentials>(&plain)
+                        .map_err(|_| crate::dsm::BoundaryError("snmp_credentials"))?;
+                poller
+                    .poll(
+                        &device.id,
+                        device
+                            .snmp_poll
+                            .as_ref()
+                            .context(crate::dsm::BoundaryError("snmp_configuration"))?,
+                        &credentials,
+                        revision,
+                        epoch,
+                    )
+                    .await
+            }
+        }
+    })
+}
+
+pub fn probe<'a>(
+    device: &'a Device,
+    password: &'a [u8],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + 'a>> {
+    Box::pin(async move {
+        match device.primary_protocol {
+            PrimaryProtocol::Redfish => {
+                Redfish::new(device)
+                    .context(crate::dsm::BoundaryError("device_certificate_invalid"))?
+                    .probe(&device.username, std::str::from_utf8(password)?)
+                    .await
+            }
+            PrimaryProtocol::Snmp => {
+                let credentials =
+                    serde_json::from_slice::<crate::snmp::secrets::Credentials>(password)
+                        .map_err(|_| crate::dsm::BoundaryError("snmp_credentials"))?;
+                crate::snmp::polling::probe(
+                    device
+                        .snmp_poll
+                        .as_ref()
+                        .context(crate::dsm::BoundaryError("snmp_configuration"))?,
+                    &credentials,
+                )
+                .await
+            }
+        }
+    })
+}
+
 #[derive(Debug)]
 pub struct PollFailure {
     uri: String,
@@ -38,6 +127,14 @@ impl std::fmt::Display for PollFailure {
 impl std::error::Error for PollFailure {}
 
 pub fn poll_failure_label(error: &anyhow::Error) -> String {
+    let code = crate::dsm::error_code(error);
+    if code.starts_with("snmp_") {
+        return format!(
+            "SNMP-Abfrage fehlgeschlagen · {}",
+            crate::api::message(code)
+        );
+    }
+
     match error.downcast_ref::<PollFailure>() {
         Some(failure) => format!("Management-Abfrage fehlgeschlagen · {failure}"),
         None => {
@@ -94,6 +191,7 @@ struct PollProgress {
     snapshot: Snapshot,
     observations: BTreeMap<String, Observation>,
     identities: crate::identity::PsuIdentities,
+    trap_identities: crate::identity::TrapIdentities,
     applicability: crate::assessment::Applicability,
     current: String,
     root_received: bool,
@@ -107,6 +205,7 @@ impl Default for PollProgress {
             },
             observations: BTreeMap::new(),
             identities: Default::default(),
+            trap_identities: Default::default(),
             applicability: Default::default(),
             current: "/redfish/v1/".into(),
             root_received: false,
@@ -296,6 +395,7 @@ impl Redfish {
                 .capabilities
                 .retain(|c| c.uri != failure.uri);
             progress.snapshot.capabilities.push(Capability {
+                optional: false,
                 uri: failure.uri.clone(),
                 outcome: failure.reason.into(),
                 http_status: None,
@@ -321,6 +421,7 @@ impl Redfish {
         }
         let mut observations = progress.observations;
         result.resource_aliases = progress.identities.merge(&mut observations);
+        result.component_identities = progress.trap_identities.finish(&result.resource_aliases);
         result.assessment_exclusions = progress.applicability.exclusions(&observations);
         crate::correlation::canonicalize(&mut result.resources, &result.resource_aliases);
         for capability in &result.capabilities {
@@ -671,6 +772,7 @@ impl Redfish {
                     }
                     result.logs_complete = false;
                     result.capabilities.push(Capability {
+                        optional: false,
                         uri: path.clone(),
                         outcome: reason.into(),
                         http_status: None,
@@ -689,6 +791,7 @@ impl Redfish {
                 }
                 result.logs_complete = false;
                 result.capabilities.push(Capability {
+                    optional: false,
                     uri: path.clone(),
                     outcome: match status {
                         StatusCode::FORBIDDEN => "forbidden_permission_or_license",
@@ -738,6 +841,7 @@ impl Redfish {
                     }
                     result.logs_complete = false;
                     result.capabilities.push(Capability {
+                        optional: false,
                         uri: progress.current.clone(),
                         outcome: failure.reason.into(),
                         http_status: None,
@@ -775,6 +879,7 @@ impl Redfish {
                         result.capabilities.push(Capability {
                             uri: path.clone(),
                             outcome: "log_selection_unsupported".into(),
+                            optional: false,
                             http_status: None,
                             attempts: 1,
                         });
@@ -787,6 +892,7 @@ impl Redfish {
                         result.capabilities.push(Capability {
                             uri: path.clone(),
                             outcome: "log_selection_unsupported".into(),
+                            optional: false,
                             http_status: None,
                             attempts: 1,
                         });
@@ -826,6 +932,7 @@ impl Redfish {
             observations.extend(resource_observations);
             result.logs.extend(resource_logs);
             result.capabilities.push(Capability {
+                optional: false,
                 uri: path.clone(),
                 outcome: if selection_valid {
                     "available"
@@ -856,6 +963,7 @@ impl Redfish {
                     })?;
             }
             progress.identities.observe(&path, &value);
+            progress.trap_identities.observe(&path, &value);
             progress.applicability.observe(&path, &value);
             crate::correlation::observe(&path, &value, &mut result.resources);
             enqueue_resources(&path, &value, &mut queue, &mut log_queue);
@@ -1085,6 +1193,22 @@ pub(crate) fn normalize(
         let identity = serde_json::to_vec(&(canonical, value.get("Id"), &created, message))
             .unwrap_or_default();
         logs.push(HardwareLog {
+            identity: Some(crate::model::LogIdentity {
+                record_id: value
+                    .get("Id")
+                    .and_then(Value::as_str)
+                    .map(|s| s.chars().take(256).collect()),
+                message_id: value
+                    .get("MessageId")
+                    .and_then(Value::as_str)
+                    .map(|s| s.chars().take(256).collect()),
+                component: value
+                    .pointer("/Links/OriginOfCondition/@odata.id")
+                    .or_else(|| value.pointer("/OriginOfCondition/@odata.id"))
+                    .and_then(Value::as_str)
+                    .map(|s| s.chars().take(1024).collect()),
+                occurrence: None,
+            }),
             fingerprint: format!("{:x}", Sha256::digest(identity)),
             message: message.chars().take(1000).collect(),
             severity: match value.get("Severity").and_then(Value::as_str) {

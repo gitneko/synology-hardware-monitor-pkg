@@ -1,10 +1,12 @@
 # Package architecture
 
-Current implementation: 0.8.0-0030.
+Current package: **0.9.0-0064**. Runtime design is described here; user setup
+is in [SNMP](SNMP.md), and tested combinations/results are in
+[Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md).
 
 ## Processes and trust boundaries
 
-One statically linked Rust/Tokio executable provides the daemon, compiled CGI bridge, local maintenance commands and service lifecycle. DSM lifecycle hooks are the small scripts required by the package format. Polling runs in the daemon, without Task Scheduler or loose monitoring scripts. Up to four devices are polled concurrently using read-only Redfish HTTPS GET requests. There is no public daemon TCP API and no SMTP server.
+One statically linked Rust/Tokio executable provides the daemon, compiled CGI bridge, local maintenance commands and service lifecycle. DSM lifecycle hooks are the small scripts required by the package format. Polling runs in the daemon, without Task Scheduler or loose monitoring scripts. Up to four devices are polled concurrently using read-only Redfish HTTPS GET requests or bounded SNMP reads, with one selected primary collector per device. Optional supervised UDP trap reception is separate. There is no public daemon TCP API and no SMTP server.
 
 The Vue 3 application is served through DSM's package web alias. A Vue 2 host launcher opens a DSM 7 desktop window containing a same-origin iframe. Versioned HTML/launcher filenames, hashed assets and positive release timestamps prevent the previously observed stale entrypoint problem.
 
@@ -54,3 +56,117 @@ Build 0037 adds an incident-token/device-revision-bound administrator reset. One
 
 
 Build 0042 uses session-bound background jobs for backup export, upload inspection, restore and cleanup. A file-backed SQLite online snapshot feeds gzip and sequenced, individually authenticated AES-GCM blocks; upload uses checked 512 KiB slices and download uses 64 KiB raw frames through the native CGI/Unix-socket bridge. Inspection fully authenticates before activating a staging database. Final restore uses a single checked transaction on a separate connection, so job status/cancellation do not wait for the shared application mutex. Jobs have opaque random IDs, admin/session checks, private files, a one-worker gate, one-hour expiry and restart cleanup. The old bounded JSON archive API remains only for compatibility. See [Backup and restore](BACKUP-RESTORE.md).
+## SNMP transport and credential boundaries
+
+The daemon, CLI and API use the same primary-protocol dispatcher. SNMP reads
+use one per-poll UDP socket with exact peer/request/version/community/context
+correlation; the pinned library owns BER, USM, HMAC, privacy and time processing.
+Polling secrets use vault AAD `device:<id>:snmp_poll`; trap secrets use
+`device:<id>:snmp_traps`. Redfish and SMTP scopes remain unchanged. Explicit
+keep/replace/clear actions commit with configuration under revision checks;
+secret values never appear in dashboards. Changing the primary target/profile
+resets target-specific state while retaining event/audit history. Credential
+rotation preserves faults. Trap-only changes preserve the primary snapshot.
+
+| Limit | Contract |
+|---|---|
+| DNS | Three seconds, at most 16 addresses; prefer the prior address while valid; no guessed fallback target after failure |
+| Poll / connection probe | 60 / 15 seconds; default request timeout two seconds, at most one timeout retry |
+| Per-poll budgets | 512 transmitted requests for v1, 128 for v2c/v3; 4096 decoded varbinds, 4 MiB received bytes, 16 KiB per message; discovery/errors/retries count |
+| Walks | At most eight independent column cursors; full index-tuple joins; decreasing OIDs abort; bounded bulk reduction and GETNEXT fallback |
+| Runtime polling contexts | At most 256 devices, two cached engines per device; bounded descriptive inventory cache, refresh after 15 minutes |
+| Receiver policy | At most 256 enabled devices, 16 source addresses per device and 16 explicit local listen addresses |
+| Pre-authentication admission | 200 eligible datagrams/s globally (burst 400), 20/source (burst 40); queues 256 globally, 16/source, round-robin |
+| Authenticated ingestion | 50/s globally (burst 100), 10/device (burst 20); 256-item channel to one database consumer |
+| Input / duplicates | 16 KiB datagram, 128 total wire bindings including mandatory prefixes; 4096-entry / 30-second semantic duplicate cache |
+| Receipts | Seven days, at most 10,000 normalized rows / 4 KiB each; insertion and independent minute pruning |
+| Urgent polls | Coalesced, at least ten seconds between starts per device, same four-job pool; regular due polls take priority |
+
+V1 uses GET/GETNEXT, never GETBULK, and rejects Counter64/v2 exception values.
+Valid `noSuchName`/error-index isolates only the failed cursor; error payloads
+are not observations. Walks never cover an arbitrary enterprise root. A current
+typed system identity/uptime exchange is mandatory. Later failure preserves
+validated partial data; missing coverage cannot establish recovery. Serial/FQDD
+identity and health are always reread, not trusted from descriptive caches.
+Uptime wrap is distinct from agent restart and neither proves a host power cycle.
+Failure backoff has positive jitter; obsolete results check revision and restore
+epoch in the write transaction.
+
+## Receiver, identity and alarm ordering
+
+Unknown sources are rejected before per-source queues and approved-source quota.
+Untrusted source/engine/user headers select one bounded credential context;
+multiple matches fail. Each approved device has one key set and a bounded remote
+engine cache; no password trial occurs. The current library also owns an unused
+internal loopback socket per context, in addition to the service sockets. Spoofed
+approved-source traffic can still consume verification capacity. Bounds and
+measured reference load are not complete UDP DoS protection.
+
+V3 requires authPriv, approved sender identity and fresh authenticated saved-target
+bootstrap. Discovery, incoming signatures and unauthenticated Reports cannot
+create trust. Bootstrap uses trap credentials, even for a Redfish primary;
+an actual successful system read is required. At most two probes run together,
+with bounded failure backoff. A ready sender needs no keepalive solely for silence.
+Non-authoritative USM time handling permits authenticated advances and rejects
+stale input; it is not the responder's symmetric clock test. Empty optional trap
+context filters impose no additional context constraint. Changed engine IDs
+require new operator review.
+
+The private `snmp-engine.json` is locked, atomically replaced and synced; boots
+increments durably once per daemon start. Rebinds share its running identity.
+Malformed/nonprivate/exhausted state fails v3 closed. App archives omit local
+engine state, remote clocks and urgent queues. The library patch exposes routed
+processing and monotonic seeding, a decoded-varbind budget hook and a boolean
+polling-hint API; cryptographic/time algorithms remain upstream. Clock-compatible
+hints use a disposable remote clock, cannot enter receipt/alarm ingestion and
+cannot lower the strict replay baseline. See [operator behavior](SNMP.md#controller-clock-compatibility).
+
+`src/alarm.rs` provides the shared transactional reducer for full polls and
+trusted partial trap observations. Receipt/evidence/transition/delivery jobs
+commit together under submission/ingestion gates. A durable per-device
+`snmp_alarm_clock` prevents a poll started before newer mapped evidence from
+lowering that fault or its dependent rollups; unrelated useful data can commit.
+A trap never replaces measurements, freshness or log baselines. Recovery requires
+fresh explicit covering primary data. Unknown/partial input preserves faults.
+
+Direct mappings require unique current inventory (at most 15 minutes old), the
+saved target/revision and actual FQDD/serial/scoped-index proof. Redfish names,
+array positions and SNMP row numbers alone are not cross-protocol identity.
+HPE index-only input remains event-only for Redfish. Mapping/evidence limits
+(4096 records/device, 16 conditions/component, 4 KiB compact evidence) fall back
+to event history/primary reconciliation without discarding faults. Exact
+cross-source history suppression additionally requires a unique shared occurrence
+ID; MessageId/text/time proximity are insufficient. Fault/recovery/fault episodes
+survive transport deduplication and acknowledgement follows condition changes.
+
+Receiver reconfiguration closes old sockets before complete-set rebinding;
+failure restores old saved configuration/sockets where possible. No atomic or
+loss-free rebind is promised. Startup bind errors retry every five seconds while
+polling/UI continue; socket failure closes/retries the set, ingestion-task failure
+requires restart. Saved and active binding states stay distinct. IPv6 sockets
+are IPv6-only. Informs/Reports/responses are excluded and no ACK is emitted.
+
+Schema 2 and logical archive format 7 preserve legacy Redfish data and convert
+older supported archives. Restore advances the runtime epoch, invalidates queued
+work, pauses devices/traps/listener/channels and leaves acknowledgement requiring
+review. Failed restore preserves the prior committed policy. Imported receipts
+are historical and compact trap evidence inactive; neither is replayed as live
+input. Runtime sequence clocks are excluded from logical archives. See
+[Backup and restore](BACKUP-RESTORE.md).
+
+`src/snmp/ups.rs` keeps strict numeric UPS contracts. Required alarm walks check
+count/descriptor consistency before empty means healthy; conditions, not row
+numbers, form acknowledgement signatures. Optional telemetry/phases do not create
+thresholds. The [SNMP guide](SNMP.md) describes profile-specific scope and retained
+fault rules. Source hashes, licenses and patch reconstruction remain maintained
+as described in [Development](DEVELOPMENT.md#snmp-dependency-and-reference-tests).
+
+
+Package state initialization is explicit in `postinst` (install/upgrade/repair),
+using the same `initialize` CLI path as ordinary startup. A schema-1 backup is
+synced and published before transactional schema-2 DDL. Startup database
+contention has a 30-second busy timeout; normal database operations retain five
+seconds. Service readiness allows 120 seconds, requires an actual socket
+connection and is published after listener/shutdown-handler setup. DSM stopped
+and unknown status codes are 3 and 4 respectively. These paths are covered by
+native and static direct-upgrade regressions, separately from NAS acceptance.

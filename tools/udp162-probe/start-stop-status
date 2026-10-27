@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+umask 077
+: "${SYNOPKG_PKGDEST:?}"
+: "${SYNOPKG_PKGVAR:?}"
+bin=$(readlink -f "$SYNOPKG_PKGDEST/bin/udp162-cap")
+pidfile="$SYNOPKG_PKGVAR/listener.pid"
+state="$SYNOPKG_PKGVAR/listener.state"
+log="$SYNOPKG_PKGVAR/probe.log"
+alive() {
+    test -f "$pidfile" || return 1
+    pid=$(cat "$pidfile")
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    test "$pid" -gt 1 || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    test "$(readlink "/proc/$pid/exe")" = "$bin"
+}
+stop_probe() {
+    if alive; then
+        kill "$pid"
+        n=0
+        while alive; do
+            n=$((n + 1))
+            if test "$n" -ge 10; then
+                echo 'Listener did not stop; retaining PID for inspection' >&2
+                return 1
+            fi
+            sleep 1
+        done
+    fi
+    rm -f "$pidfile" "$state" "$SYNOPKG_PKGVAR/listener.tmp"
+}
+case "${1:-}" in
+    start)
+        if alive; then exit 0; fi
+        rm -f "$pidfile" "$state" "$SYNOPKG_PKGVAR/baseline.state"
+        {
+            date -u
+            id
+            echo '=== baseline: identical binary WITHOUT file capability ==='
+            "$SYNOPKG_PKGDEST/bin/udp162-baseline" once 0.0.0.0:162 "$SYNOPKG_PKGVAR/baseline.state" || echo "baseline_exit=$?"
+            echo '=== listener: inspect installed conf/privilege for requested capabilities ==='
+        } > "$log" 2>&1
+        "$bin" serve 0.0.0.0:162 "$state" >> "$log" 2>&1 < /dev/null &
+        echo "$!" > "$pidfile"
+        n=0
+        while test "$n" -lt 10; do
+            if test -f "$state"; then
+                case "$(cat "$state")" in LISTENING*) if alive; then exit 0; fi ;; esac
+                break
+            fi
+            if ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then break; fi
+            n=$((n + 1))
+            sleep 1
+        done
+        cat "$log" >&2
+        stop_probe
+        exit 1
+        ;;
+    stop) stop_probe ;;
+    status) alive ;;
+    *) echo 'Usage: start-stop-status start|stop|status' >&2; exit 1 ;;
+esac

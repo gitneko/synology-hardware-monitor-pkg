@@ -2,6 +2,8 @@
 
 Administrators can add, edit, test, pause and remove devices in the DSM application. The user confirms creation/editing, including address, password and certificate changes, on the test NAS. Viewer access is read-only; full DSM Application Privileges/menu integration remains separate unfinished work.
 
+Choose **Redfish** or **SNMP** as the primary polling protocol. The following HTTPS settings apply to Redfish; see [SNMP setup](SNMP.md) for agent/security/profile configuration and optional traps.
+
 Use the management controller's HTTPS origin, for example `https://bmc.example/`, without a Redfish path, credentials or query string. Enter a BMC account permitted to read the required hardware resources; effective privileges vary by firmware/resource. The app follows advertised resource links rather than assuming one fixed system ID. Pauses between polls are 30–86,400 seconds and start after completion; optional reminders must be at least five minutes apart.
 
 In Standard mode, HTTPS certificate chains and hostnames are verified. Publicly trusted certificates or an imported private CA/server certificate are supported. Import PEM certificates only, never private keys. There is no production switch to disable TLS verification. Changing the endpoint or username requires a new password; otherwise a blank password preserves the saved secret. A CA change keeps hostname checks active.
@@ -43,3 +45,27 @@ Build **0.8.0-0042** adds a per-device **Read hardware log** setting:
 Limited retrieval uses the controller's `$orderby=Created desc` and `$top` query support. Rejected queries, observed ascending results or excessive page sizes are reported as incomplete collection; the app does not silently label the first unfiltered page as the newest entries. Entries without a valid `Created` value cannot be placed in a newest selection and are omitted with a warning; All available preserves them. Controllers that do not support these queries should use All available or Disabled. Pagination, individual response limits and the normal resource/time/byte/item budgets still apply in both reading modes. All available is not a promise to fetch an arbitrarily large controller database in one poll; incomplete scans remain explicitly marked.
 
 Changing the reading mode establishes a new log baseline after the next complete scan, avoiding notifications for historical entries exposed by the new selection. Already stored recent logs are preserved. The setting is independent of [hardware-log retention](HISTORY-RETENTION.md): requesting 100 entries does not reduce stored history to 100, disabling collection does not disable cleanup, and even All available cannot reimport entries older than the configured retention cutoff.
+## SNMP devices and optional traps
+
+Select SNMP for primary polling without requiring an HTTPS origin, certificate
+or Redfish account. Configure agent address/port, explicit security and profile;
+review required versus optional coverage in the connection test. Polling and
+trap credentials have independent keep/replace/clear actions.
+
+Traps may accompany either primary. Both per-device reception and the global
+listener must be enabled. V3 needs a fresh saved-target identity check followed
+by explicit draft adoption and save; a successful probe alone grants no trust.
+Missing approval and privileged-port setup failures appear prominently. Default
+local trap port is 1162; port 162 can use the bundled administrative helper.
+
+See [SNMP setup, all profile scopes and diagnostics](SNMP.md), including optional
+context filters, controller clock compatibility, interface link policy, HPE
+population/fan units and UPS state interpretation. The dashboard separates poll
+freshness, normal accepted traps and compatibility polling hints. Only fresh
+covering primary data confirms fault recovery. Notifications use the configured
+channels/filters; event-only trap delivery is a separate default-off selection.
+
+Hardware-log reading controls above apply to Redfish collection; SNMP currently
+does not use that policy even though the editor still shows it. Hiding those
+controls and cleaning up old log-query warnings are [deferred until after the
+SNMP merge](LOG-QUERY-WARNINGS-FOLLOWUP.md).

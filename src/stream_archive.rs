@@ -1,7 +1,7 @@
 //! File-backed, gzip-compressed logical records in sequenced authenticated AES-GCM frames.
 //! Imported SQL is never executed. A staging database is disposable until final authentication.
 use crate::{
-    archive::{Cell, TABLES},
+    archive::{table_specs, Cell, FORMAT, TABLES},
     dsm::BoundaryError,
     store::Store,
     vault::Vault,
@@ -330,7 +330,7 @@ pub fn export(
     let conn = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.execute_batch("PRAGMA cache_size=-4096;")?;
     let metadata = Metadata {
-        format: 6,
+        format: FORMAT,
         version: env!("CARGO_PKG_VERSION").into(),
         created: crate::now(),
     };
@@ -346,7 +346,7 @@ pub fn export(
         },
     )? as u64;
     let mut count = 0u64;
-    for (table, columns) in TABLES {
+    for (table, columns) in table_specs() {
         bytes += write_record(
             &mut out,
             &Record::Table {
@@ -374,12 +374,17 @@ pub fn export(
                     _ => anyhow::bail!("unsupported cell"),
                 });
             }
-            if *table == "devices" || *table == "mail_settings" {
+            if *table == "devices" || *table == "mail_settings" || *table == "protocol_secrets" {
                 let id = if *table == "devices" {
                     match &cells[0] {
                         Cell::Text(s) => s.clone(),
                         _ => anyhow::bail!("device id"),
                     }
+                } else if *table == "protocol_secrets" {
+                    let (Cell::Text(id), Cell::Text(p)) = (&cells[0], &cells[1]) else {
+                        anyhow::bail!("protocol identity")
+                    };
+                    crate::archive::purpose(p)?.aad(id)
                 } else {
                     "settings:smtp".into()
                 };
@@ -425,7 +430,7 @@ pub fn export(
     file.flush()?;
     file.get_ref().sync_all()?;
     Ok(
-        serde_json::json!({"format":6,"version":metadata.version,"created":metadata.created,"rows":count,"logical_bytes":bytes,"file_bytes":file.get_ref().metadata()?.len()}),
+        serde_json::json!({"format":metadata.format,"version":metadata.version,"created":metadata.created,"rows":count,"logical_bytes":bytes,"file_bytes":file.get_ref().metadata()?.len()}),
     )
 }
 
@@ -481,7 +486,7 @@ pub fn inspect(
     }
     let store = Store::open(stage)?;
     store.0.execute_batch("PRAGMA cache_size=-4096;")?;
-    for (table, _) in TABLES {
+    for (table, _) in table_specs().collect::<Vec<_>>().into_iter().rev() {
         store.0.execute(&format!("DELETE FROM {table}"), [])?;
     }
     let decrypt = Decrypt::new(File::open(source)?, password)?;
@@ -491,13 +496,20 @@ pub fn inspect(
         anyhow::bail!("archive metadata")
     };
     anyhow::ensure!(
-        metadata.format == 6 && metadata.version.len() <= 80 && metadata.created >= 0,
+        matches!(metadata.format, 6 | FORMAT)
+            && metadata.version.len() <= 80
+            && metadata.created >= 0,
         "archive version"
     );
     let mut total = 0u64;
     let mut counts = std::collections::BTreeMap::<String, u64>::new();
     let mut marker = read_record(&mut reader)?.context("archive table marker")?;
-    for (table, columns) in TABLES.iter().copied() {
+    let tables: Vec<_> = if metadata.format == 6 {
+        TABLES.iter().collect()
+    } else {
+        table_specs().collect()
+    };
+    for &(table, columns) in tables {
         anyhow::ensure!(
             matches!(&marker,Record::Table{name} if name==table),
             "archive table/order"
@@ -522,12 +534,17 @@ pub fn inspect(
                     .all(|v| !matches!(v,Value::Integer(n) if *n<0 || *n>i64::MAX/4)),
                 "archive integer"
             );
-            if table == "devices" || table == "mail_settings" {
+            if table == "devices" || table == "mail_settings" || table == "protocol_secrets" {
                 let id = if table == "devices" {
                     match &values[0] {
                         Value::Text(s) => s.clone(),
                         _ => anyhow::bail!("device id"),
                     }
+                } else if table == "protocol_secrets" {
+                    let (Value::Text(id), Value::Text(p)) = (&values[0], &values[1]) else {
+                        anyhow::bail!("protocol identity")
+                    };
+                    crate::archive::purpose(p)?.aad(id)
                 } else {
                     "settings:smtp".into()
                 };
@@ -574,19 +591,190 @@ pub fn inspect(
         compressed.get_ref().verified,
         "archive authentication incomplete"
     );
+    if metadata.format == 6 {
+        crate::snmp::persistence::initialize(&store.0)?;
+    }
     progress(total, 0)?;
     anyhow::ensure!(
         !store.0.prepare("PRAGMA foreign_key_check")?.exists([])?,
         "archive foreign keys"
     );
     Ok(
-        serde_json::json!({"format":6,"version":metadata.version,"created":metadata.created,"rows":total,"devices":counts.get("devices").copied().unwrap_or(0),"alarms":counts.get("alarm_state").copied().unwrap_or(0),"events":counts.get("events").copied().unwrap_or(0),"hardware_logs":counts.get("hardware_logs").copied().unwrap_or(0)}),
+        serde_json::json!({"format":metadata.format,"version":metadata.version,"created":metadata.created,"rows":total,"devices":counts.get("devices").copied().unwrap_or(0),"alarms":counts.get("alarm_state").copied().unwrap_or(0),"events":counts.get("events").copied().unwrap_or(0),"hardware_logs":counts.get("hardware_logs").copied().unwrap_or(0)}),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn streaming_roundtrip_rekeys_both_snmp_credentials_and_pauses_inputs() {
+        use crate::snmp::secrets::{Credentials, Purpose, SecretUpdate, SecretUpdates};
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let mut store = Store::open(&source).unwrap();
+        let vault = Vault::open(&source.join("master.key")).unwrap();
+        let device: crate::model::Device = serde_json::from_value(serde_json::json!({
+            "id":"snmp-roundtrip", "name":"SNMP", "primary_protocol":"snmp",
+            "interval_seconds":60, "repeat_seconds":null, "alerts_enabled":false,
+            "hardware_log":{"mode":"latest","limit":123},
+            "snmp_poll":{"host":"192.0.2.10","security":{"version":"v2c"}},
+            "snmp_traps":{"enabled":true,"allowed_sources":["192.0.2.10"],"engine_ids":["8000000001"],"security":{"version":"v3","username":"trap-reader"}}
+        })).unwrap();
+        let updates = SecretUpdates {
+            snmp_poll: SecretUpdate::Replace {
+                credentials: Credentials::Community {
+                    community: "synthetic-poll-community".into(),
+                },
+            },
+            snmp_traps: SecretUpdate::Replace {
+                credentials: Credentials::Usm {
+                    auth_password: "synthetic-auth-password".into(),
+                    priv_password: "synthetic-priv-password".into(),
+                },
+            },
+        };
+        let prepared =
+            crate::snmp::persistence::prepare_secrets(&store, &vault, &device, &updates).unwrap();
+        store
+            .save_admin_with_snmp(&device, b"", None, "admin", Some(&prepared))
+            .unwrap();
+        let settings = crate::retention::Settings {
+            events_days: 30,
+            hardware_logs_days: 60,
+        };
+        store.save_retention(&settings, 0, "admin").unwrap();
+        let snap = dir.path().join("snapshot.db");
+        let file = dir.path().join("archive.hmbackup");
+        snapshot(&source.join("monitor.db"), &snap, &mut |_, _| Ok(())).unwrap();
+        assert_eq!(
+            export(
+                &snap,
+                &file,
+                &vault,
+                "synthetic-backup-password",
+                &mut |_, _| Ok(())
+            )
+            .unwrap()["format"],
+            FORMAT
+        );
+        let destination = dir.path().join("destination");
+        let mut target = Store::open(&destination).unwrap();
+        let target_vault = Vault::open(&destination.join("master.key")).unwrap();
+        let stage = dir.path().join("stage");
+        inspect(
+            &file,
+            &stage,
+            &target_vault,
+            "synthetic-backup-password",
+            &mut |_, _| Ok(()),
+        )
+        .unwrap();
+        let stage = Store::open(&stage).unwrap();
+        target
+            .restore_staged(&stage.0, &target_vault, "admin", 0, &mut || Ok(()))
+            .unwrap();
+        assert_eq!(target.retention_settings().unwrap().0, settings);
+        let (restored, redfish_secret, _) = target.get(&device.id).unwrap().unwrap();
+        assert!(!restored.enabled && !restored.snmp_traps.unwrap().enabled);
+        assert_eq!(restored.hardware_log, device.hardware_log);
+        assert!(redfish_secret.is_empty());
+        assert!(target.receiver_epoch().unwrap() > 0);
+        for purpose in [Purpose::SnmpPoll, Purpose::SnmpTraps] {
+            let old = store.protocol_secret(&device.id, purpose).unwrap().unwrap();
+            let new = target
+                .protocol_secret(&device.id, purpose)
+                .unwrap()
+                .unwrap();
+            let aad = purpose.aad(&device.id);
+            assert_eq!(
+                &*vault.unseal(&aad, &old).unwrap(),
+                &*target_vault.unseal(&aad, &new).unwrap()
+            );
+            assert!(vault.unseal(&aad, &new).is_err());
+        }
+    }
+
+    #[test]
+    fn pre_snmp_format_six_stream_adds_safe_receiver_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("legacy-six.hmbackup");
+        let mut out = GzEncoder::new(
+            Encrypt::new(
+                BufWriter::new(private_file(&file).unwrap()),
+                "synthetic-backup-password",
+            )
+            .unwrap(),
+            Compression::fast(),
+        );
+        write_record(
+            &mut out,
+            &Record::Header {
+                metadata: Metadata {
+                    format: 6,
+                    version: "0.8.0".into(),
+                    created: 100,
+                },
+            },
+        )
+        .unwrap();
+        for (table, _) in TABLES {
+            write_record(
+                &mut out,
+                &Record::Table {
+                    name: (*table).into(),
+                },
+            )
+            .unwrap();
+            if *table == "history_settings" {
+                write_record(
+                    &mut out,
+                    &Record::Row {
+                        cells: vec![
+                            Cell::Integer(1),
+                            Cell::Text(
+                                serde_json::to_string(&crate::retention::Settings {
+                                    events_days: 17,
+                                    hardware_logs_days: 23,
+                                })
+                                .unwrap(),
+                            ),
+                            Cell::Integer(1),
+                        ],
+                    },
+                )
+                .unwrap();
+            }
+        }
+        write_record(&mut out, &Record::End { rows: 1 }).unwrap();
+        out.finish().unwrap().finish().unwrap().flush().unwrap();
+        let vault = Vault::open(&dir.path().join("master.key")).unwrap();
+        let stage = dir.path().join("stage");
+        let summary = inspect(
+            &file,
+            &stage,
+            &vault,
+            "synthetic-backup-password",
+            &mut |_, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(summary["format"], 6);
+        let stage = Store::open(&stage).unwrap();
+        let mut target = Store::open(&dir.path().join("target")).unwrap();
+        target
+            .restore_staged(&stage.0, &vault, "admin", 0, &mut || Ok(()))
+            .unwrap();
+        assert_eq!(
+            target.retention_settings().unwrap().0,
+            crate::retention::Settings {
+                events_days: 17,
+                hardware_logs_days: 23
+            }
+        );
+        assert!(!target.receiver_settings().unwrap().0.enabled);
+        assert!(target.snmp_receipts(None, 10).unwrap().is_empty());
+    }
+
     #[test]
     fn file_archive_roundtrips_secrets_history_and_rejects_damage() {
         let dir = tempfile::tempdir().unwrap();
@@ -971,6 +1159,7 @@ mod tests {
                 let fingerprint = format!("{i:064x}");
                 let log = crate::model::HardwareLog {
                     fingerprint: fingerprint.clone(),
+                    identity: None,
                     message: message.clone(),
                     severity: crate::model::Health::Ok,
                     created: Some("2021-07-23T04:46:34Z".into()),

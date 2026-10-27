@@ -36,3 +36,21 @@ Time-based cleanup preserves current hardware alarm states, acknowledgements and
 The **audit log keeps the newest 10,000 entries**, irrespective of either age setting; the interface shows the most recent 50. The 10,000-entry cap is fixed, rather than a third age setting.
 
 SQLite reuses freed pages. Deletion usually reduces future growth and backup content without immediately shrinking `monitor.db` on disk. Cleanup does not run a blocking `VACUUM`. Sufficient free disk space is still required for SQLite transactions, snapshots and restore staging. Use a complete backup if deleted history must remain available elsewhere.
+
+## Event count and display window
+
+Starting with build 0.9.0-0063, the Events navigation counter is the total number
+of retained event records. It is not an unread counter. The dashboard still
+loads only the latest 100 event records; grouping and filters determine how
+many messages are displayed from that window. The header labels these values
+separately. Retention cleanup and clearing the history decrease the stored
+total, while CSV export continues to include the full matching retained history.
+
+## SNMP diagnostic bounds
+
+Event-only `snmp_trap` history also has a fixed seven-day/10,000-row bound;
+normalized trap receipts have their own seven-day/10,000-row cap. General event
+retention can expire eligible events earlier, but `0` does not disable these
+SNMP-specific limits. Pending delivery/replay protection still applies. Mapped
+state-alarm events use normal event retention; pruning never clears retained
+hardware faults. See [SNMP diagnostic event retention](SNMP.md#diagnostic-event-retention).

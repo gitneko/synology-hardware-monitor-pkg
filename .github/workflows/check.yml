@@ -8,11 +8,14 @@ permissions:
 jobs:
   core:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
+      - name: Install local reference prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential openssl perl python3 patch snmp snmpd
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
@@ -20,6 +23,22 @@ jobs:
       - run: cargo build --locked --features local-dev
       - run: python3 tools/local_dev_integration_test.py target/debug/hardware-monitor
       - run: python3 -m unittest discover -s tools/tests -v
+      - run: python3 tools/check_docs.py
+      - run: cargo build --locked
+      - name: Verify patched SNMP source, security and malformed corpus
+        run: python3 tools/snmp-reference/run.py
+      - name: Check direct legacy upgrade and DSM lifecycle
+        run: python3 tools/upgrade_integration.py target/debug/hardware-monitor --report .build/snmp-ci/upgrade-native.json
+      - name: Check native product SNMP integration
+        run: python3 tools/snmp_integration_test.py target/debug/hardware-monitor --report .build/snmp-ci/reference-native.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-snmp-reference
+          path: |
+            .build/snmp-ci/*.json
+            .build/snmp-reference/evidence.json
+          if-no-files-found: error
+          retention-days: 14
   web:
     runs-on: ubuntu-24.04
     steps:
@@ -35,6 +54,7 @@ jobs:
   packages:
     needs: [core, web]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1
@@ -46,7 +66,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl perl python3
+        run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl perl python3 snmp snmpd
       - name: Build pinned musl toolchain
         run: sh tools/bootstrap_musl.sh
       - name: Build and validate DSM 7 package
@@ -57,6 +77,12 @@ jobs:
         with:
           name: checked-spks
           path: dist/current/latest-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-snmp-reference
+          path: dist/current/snmp-reference*.json
           if-no-files-found: error
           retention-days: 14
   latest:

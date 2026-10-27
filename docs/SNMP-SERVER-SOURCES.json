@@ -1,0 +1,68 @@
+{
+  "checked_on": "2026-10-20",
+  "purpose": "Numeric OID/type/enum/unit verification only. No proprietary MIB/PDF distributed and no runtime MIB loading.",
+  "evidence_limit": "Synthetic fixtures and independent Net-SNMP establish application/protocol behavior. Real vendor firmware/model acceptance is recorded separately in HARDWARE-COMPATIBILITY.md and VALIDATION.md.",
+  "sources": {
+    "dell.pdf": {
+      "url": "https://dl.dell.com/topicspdf/repostidrac93_en-us.pdf",
+      "sha256": "7631fff9afd8a089a5e842f43f762b0f78202dfac690cdaf599e2c720cc96f9d"
+    },
+    "hpe.pdf": {
+      "url": "https://support.hpe.com/hpesc/public/api/document/a00101456en_us",
+      "sha256": "3cd7501f8054b1ad2899c40419c390635f4975a7f831febded3f5b03e6a4a475"
+    },
+    "entity-sensor.txt": {
+      "url": "https://www.rfc-editor.org/rfc/rfc3433.txt",
+      "sha256": "b5c78f14dbeb8ca93fedd4542a10272a996e13f890d59246ac7860df1a9e8be3"
+    },
+    "entity.txt": {
+      "url": "https://www.rfc-editor.org/rfc/rfc4133.txt",
+      "sha256": "95e098fb64acf404a8124364e18b518810f3a6936367569cd69da186396daf28"
+    },
+    "idrac.mib": {
+      "url": "https://raw.githubusercontent.com/librenms/librenms/098632f88c6c5fdaa0caee0787c5de26efac7d03/mibs/dell/IDRAC-MIB-SMIv2",
+      "sha256": "f276ccf12e4a729f3e73c27c5c4b6540271829183d1a4756137900392d559c89",
+      "delivery": "Third-party mirror of original vendor-authored MIB, pinned commit; checked against official documentation where available. No MIB file shipped."
+    },
+    "cpqhlth.mib": {
+      "url": "https://raw.githubusercontent.com/librenms/librenms/098632f88c6c5fdaa0caee0787c5de26efac7d03/mibs/hp/CPQHLTH-MIB",
+      "sha256": "45dae63831b4d13b86f97dc498660fe26a56f2c81dee654e19502e75b286e7a1",
+      "delivery": "Third-party mirror of original vendor-authored MIB, pinned commit; checked against official documentation where available. No MIB file shipped."
+    },
+    "cpqida.mib": {
+      "url": "https://raw.githubusercontent.com/librenms/librenms/098632f88c6c5fdaa0caee0787c5de26efac7d03/mibs/hp/CPQIDA-MIB",
+      "sha256": "3d5769e2af0ac56543ed273df513082d73f7f2fcc60bc8714e0f99f99f9a074c",
+      "delivery": "Third-party mirror of original vendor-authored MIB, pinned commit; checked against official documentation where available. No MIB file shipped."
+    },
+    "dell-omsa.pdf": {
+      "url": "https://dl.dell.com/topicspdf/dell-openmanage-server-administrator-9.1_connectivity-guide_en-us.pdf",
+      "sha256": "636842b4e96d9fd7b7a21a9689b632b3de30a187c102fcf493f8e1d69da81a38"
+    }
+  },
+  "hpe_0056_verification": {
+    "checked_on": "2026-10-23",
+    "mib_kit": {
+      "url": "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p1580676047/v229101/upd11.85mib.tar.gz",
+      "sha256": "be18d3977d62d24f5ac049168fb3bf8b73b19dc3180bc710781d2d9ec2f34a2c",
+      "files": {
+        "cpqhlth.mib": "2ea557978988d9b605bd73b98a3199994e26df2ad9be518b2bcc0fa13d3cfbe5",
+        "cpqsm2.mib": "b5d316253a1172a8ca97409338bf3adc3ad9ff1b87619530d2016b5aef105766",
+        "cpqida.mib": "6365a140cbde21579c8e8c0ecd41765ffefabf1cc46774d619d06f53de520bb6"
+      },
+      "distributed": false
+    },
+    "fan_speed_advisory": {
+      "url": "https://support.hpe.com/hpesc/public/api/document/a00147240en_us",
+      "sha256": "0502b9d8d3cecf4ac13d13c0290535b6e31dbbd26b184752d98727b3ffbe3d31",
+      "content_type": "HTML",
+      "verified": "iLO 5 >=3.06 and iLO 6 >=1.61 change column 6 from levels to percentage; column 12 remains RPM"
+    },
+    "capture": "User-supplied DL20 Gen11 / iLO 6 1.79, 23 October 2026; only sanitized 69-row allowlist subset distributed. No original identifiers, addresses or event logs.",
+    "contracts": [
+      "PSU Present/Condition/Status are separate enums; only explicit absence excludes a non-faulty slot",
+      "DIMM status=notPresent plus size=0 plus Condition=other proves empty population; module Condition=4 is Warning, size is KiB",
+      "CPQIDA other or empty storage tables remain unknown regardless of power state",
+      "Presence is read fresh; accepted snapshot history is revision/agent scoped"
+    ]
+  }
+}

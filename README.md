@@ -2,18 +2,20 @@
 
 *This Synology package and code was developed by GPT-6.1 Sol and tested by humans.*
 
-Open-source, cross-vendor server hardware monitoring using Redfish on a Synology NAS.
+Open-source, cross-vendor server hardware monitoring using Redfish or SNMP on a Synology NAS.
 
 Due to thirdparty package limitations imposed by Synology, this package does not integrate natively into Synology notifications
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current build: 0.8.0-0043.** The Package Center title is **Hardware Monitor**.
+**Current build: 0.9.0-0064.** The Package Center title is **Hardware Monitor**.
 
 ## Features
 
 - A lightweight Rust/Tokio background service, SQLite persistence and a Vue application inside the DSM 7 desktop. No Task Scheduler or loose polling scripts.
 - Read-only Redfish polling with capability discovery, standard/selected OEM storage links, power supplies, fans, temperatures, hardware logs and reachability.
+- Explicit SNMPv1/v2c/v3 primary polling with bounded manufacturer profiles, independent encrypted credentials and coverage diagnostics.
+- Optional SNMP traps on UDP port (default 1162; [administrative setup for privileged ports](docs/TRAP-PRIVILEGED-PORTS.md)), reviewed v3 sender identities and provisional alarms confirmed by primary polling. [0.9.0 development notes](docs/RELEASE-NOTES-0.9.0.md).
 - Persistent faults, confirmed recoveries, optional reminders, deduplication and grouping of linked summary alarms without merging independent component faults.
 - Acknowledge known hardware faults with a reason: blue status, persistent suppression for email/desktop, automatic summary assessment and reactivation on recovery or worsening. [Acknowledgement rules](docs/ALARM-ACKNOWLEDGEMENT.md).
 - Independently configured SMTP email and native DSM desktop notifications, event filters and per-device delivery enablement. Editable templates, local timestamps and test actions.
@@ -23,24 +25,30 @@ You can choose if you want either, none or both.
 - Optional data deletion in the DSM uninstall wizard. Data is retained by default; opt in to remove settings, credentials, history, keys and local upgrade backups. [Uninstall behavior](docs/UNINSTALL.md).
 - **German and English:** Automatic/Deutsch/English interface selection, separate saved languages for background channels, localized new event text/API messages/CSV headings and English documentation. Custom templates, vendor text and legacy event text are preserved.
 
+See the [SNMP setup and operation guide](docs/SNMP.md) for credentials, profiles, sender verification and troubleshooting.
+
 ## Compatibility and evidence
 
-The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). Its functions have been tested with iDRAC7, iDRAC8, iDRAC9 and iLO 5 on the hardware listed below.
+The supported package target is **DSM 7.0+ x86_64** (minimum `7.0-40761`),
+including v1000 and geminilake families. Recorded Redfish tests cover Dell
+R420/iDRAC7, R330/iDRAC8, R340/iDRAC9 and HPE DL160 Gen10/iLO 5; additional
+scoped iLO 6 evidence is recorded separately.
 
-| Platform | Status |
-|---|---|
-| RS2421RP+ / v1000 / DSM 7.4.1-90080 | Prior-release installation, internal window, sign-in, device management, notification and backup/restore workflows confirmed by the user |
-| Dell PowerEdge R420 / iDRAC7 | Complete live polling and overall health assessment verified |
-| Dell PowerEdge R330 / iDRAC8 | Complete live polling and overall health assessment verified |
-| Dell PowerEdge R340 / iDRAC9 | Complete live polling and overall health assessment verified |
-| HPE ProLiant DL160 Gen10 / iLO 5 3.22 | Complete live polling and overall health assessment verified |
+User-confirmed SNMP operation includes Dell iDRAC traps, HPE iLO, Synology DSM,
+Generic and Network Generic profiles. Alarm notifications, fault/recovery,
+acknowledgement, duplicate handling, trap reception after package/DSM restart,
+upgrade **0.8.0-0043 → 0.9.0-0062** and backup/restore are confirmed for the
+reported deployment. These results do not certify every model, firmware or
+security variant. **APC/Eaton/RFC 1628 UPS profiles are released untested on real
+UPS hardware**, with local synthetic/reference coverage only.
 
-No universal RAID/OEM or production-reliability claim is made. **SNMP polling/traps are not implemented yet.** See [hardware compatibility](docs/HARDWARE-COMPATIBILITY.md), [validation](docs/VALIDATION.md) and [roadmap](docs/ROADMAP.md).
+See the [protocol-specific hardware matrix](docs/HARDWARE-COMPATIBILITY.md),
+[validation and evidence limits](docs/VALIDATION.md) and [roadmap](docs/ROADMAP.md).
 
 ## Getting started
 
-1. Download the checked SPK from the release tagged `latest`: `HardwareMonitor-dsm7-x86_64.spk` for DSM 7 (including v1000 and geminilake). Verify it against `SHA256SUMS`, install through Package Center and open Hardware Monitor from DSM. The first release appears after this repository has been pushed to GitHub and its default-branch workflow succeeds.
-2. Add an HTTPS management-controller origin and an account with the required hardware-read permissions. Use a trusted certificate chain/private CA with a matching hostname in Standard mode. For older Dell controllers or the tested iLO factory certificate, explicitly select iDRAC7/8 and iLO compatibility and import the exact server certificate from a trusted source; its fingerprint and validity dates are checked before HTTP credentials are sent.
+1. Download the checked SPK from the release tagged `latest`: `HardwareMonitor-dsm7-x86_64.spk` for DSM 7 (including v1000 and geminilake). Verify it against `SHA256SUMS`, install through Package Center and open Hardware Monitor from DSM. Release assets are updated by the default-branch workflow after its checks succeed.
+2. Choose Redfish or SNMP as the primary protocol. For SNMP, follow the [setup guide](docs/SNMP.md). For Redfish, add an HTTPS management-controller origin and an account with the required hardware-read permissions. Use a trusted certificate chain/private CA with a matching hostname in Standard mode. For older Dell controllers or the tested iLO factory certificate, explicitly select iDRAC7/8 and iLO compatibility and import the exact server certificate from a trusted source; its fingerprint and validity dates are checked before HTTP credentials are sent.
 3. Review current/retained alarms and discovered coverage. Missing or unavailable values do not confirm a healthy state or recovery.
 4. If delivery is wanted, enable the device notification option, configure the channel and select events. Configure background languages independently of the interface. Existing templates are not overwritten by a language switch.
 5. Download an encrypted app backup and retain its password separately. A restore replaces app data, then leaves devices/channels paused for deliberate review and reactivation.
@@ -66,8 +74,10 @@ English interface, using synthetic example data; no real credentials or private 
 - [CSV, clearing and backup/restore](docs/BACKUP-RESTORE.md)
 - [Development, local checks, SPK builds and GitHub releases](docs/DEVELOPMENT.md)
 - [DSM package architecture families](docs/PACKAGE-ARCHITECTURES.md)
-- [NAS acceptance](docs/NAS-ACCEPTANCE.md), [live R340 records](docs/LIVE-TEST-R340.md), [DSM privilege findings](docs/DSM-PRIVILEGES.md)
+- [DSM privilege findings](docs/DSM-PRIVILEGES.md)
 - [Validation](docs/VALIDATION.md), [roadmap](docs/ROADMAP.md)
+- [SNMP setup, profiles, traps and troubleshooting](docs/SNMP.md)
+- [0.9.0 release notes](docs/RELEASE-NOTES-0.9.0.md)
 
 Runtime state, passwords, tokens and raw private controller responses do not belong in source archives or fixtures.
 
@@ -87,4 +97,4 @@ Integration tests use synthetic loopback servers and OpenSSL-generated test cert
 
 ## Local development without DSM
 
-Run `python3 tools/dev.py` from the project root, then open <http://127.0.0.1:18774/>. The complete frontend and backend run without an application login or SPK build, with persistent local state and real Redfish connections. Device credentials and certificate checks remain required. This optional mode is excluded from normal DSM builds. SNMP is not yet implemented. See [Development](docs/DEVELOPMENT.md) for requirements and details.
+Run `python3 tools/dev.py` from the project root, then open <http://127.0.0.1:18774/>. The complete frontend and backend run without an application login or SPK build, with persistent local state and real Redfish/SNMP connections. Device credentials and applicable certificate checks remain required. This optional mode is excluded from normal DSM builds. See [Development](docs/DEVELOPMENT.md) for requirements and details.

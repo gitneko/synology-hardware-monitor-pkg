@@ -5,6 +5,7 @@ pub mod dsm;
 mod hpe_power;
 pub mod legacy_tls;
 pub mod model;
+pub mod snmp;
 pub mod store;
 pub mod vault;
 
@@ -35,5 +36,6 @@ pub mod i18n;
 
 pub mod acknowledgement;
 
+mod alarm;
 #[cfg(feature = "local-dev")]
 pub mod local;

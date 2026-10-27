@@ -4,6 +4,111 @@ use crate::model::{Health, Observation};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+pub(crate) fn valid_reported_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.chars().any(char::is_control)
+        && value
+            .chars()
+            .any(|c| c != '0' && c != '-' && !c.is_whitespace())
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "n/a"
+                | "na"
+                | "none"
+                | "unknown"
+                | "not available"
+                | "not specified"
+                | "unspecified"
+                | "not present"
+        )
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Component {
+    pub key: String,
+    pub locator: String,
+    pub aliases: Vec<String>,
+}
+/// Only explicit Dell FQDD fields are aliases; MemberId/name/array indices
+/// are never promoted to a cross-protocol physical identity.
+#[derive(Default)]
+pub(crate) struct TrapIdentities(BTreeMap<String, Component>);
+impl TrapIdentities {
+    pub fn observe(&mut self, fallback: &str, value: &Value) {
+        if value.get("Message").is_some() {
+            return;
+        }
+        let key = value
+            .get("@odata.id")
+            .and_then(Value::as_str)
+            .unwrap_or(fallback);
+        fn fqdds(v: &Value, out: &mut Vec<String>, depth: u8) {
+            if depth > 8 {
+                return;
+            }
+            if let Some(m) = v.as_object() {
+                for (k, v) in m {
+                    if k == "FQDD" {
+                        if let Some(s) = v.as_str().filter(|s| valid_reported_identifier(s)) {
+                            out.push(s.into());
+                        }
+                    } else {
+                        fqdds(v, out, depth + 1);
+                    }
+                }
+            }
+        }
+        let mut aliases = Vec::new();
+        if let Some(oem) = value.pointer("/Oem/Dell") {
+            fqdds(oem, &mut aliases, 0);
+        }
+        aliases.sort();
+        aliases.dedup();
+        aliases.truncate(4);
+        if !aliases.is_empty()
+            && key.starts_with("/redfish/v1/")
+            && key.len() <= 1024
+            && self.0.len() < 4096
+        {
+            self.0.insert(
+                key.into(),
+                Component {
+                    key: key.into(),
+                    locator: key.into(),
+                    aliases,
+                },
+            );
+        }
+        for name in [
+            "PowerSupplies",
+            "Fans",
+            "Temperatures",
+            "Memory",
+            "Drives",
+            "StorageControllers",
+            "Members",
+        ] {
+            if let Some(items) = value.get(name).and_then(Value::as_array) {
+                for (i, item) in items.iter().enumerate() {
+                    self.observe(&crate::correlation::embedded_uri(key, name, item, i), item);
+                }
+            }
+        }
+    }
+    pub fn finish(self, canonical: &BTreeMap<String, String>) -> Vec<Component> {
+        self.0
+            .into_values()
+            .map(|mut c| {
+                if let Some(key) = canonical.get(&c.key) {
+                    c.key = key.clone();
+                }
+                c
+            })
+            .collect()
+    }
+}
+
 #[derive(Default)]
 pub struct PsuIdentities(BTreeMap<(String, String), BTreeMap<String, bool>>);
 pub(crate) fn severity(health: Health) -> u8 {

@@ -1,0 +1,548 @@
+//! BER length encoding and decoding.
+//!
+//! Length encoding follows X.690 Section 8.1.3:
+//! - Short form: Single byte, bit 8=0, value 0-127
+//! - Long form: Initial byte (bit 8=1, bits 7-1=count), followed by length bytes
+//! - Indefinite form (0x80): Rejected per net-snmp behavior
+
+use std::net::SocketAddr;
+
+use crate::error::internal::{DecodeErrorKind, DecodeErrorOrigin};
+use crate::error::{DecodeError, Error, Result};
+
+/// Returns the number of bytes needed to encode a length value in BER.
+///
+/// Uses short form (1 byte) for lengths <= 127, long form otherwise.
+#[inline]
+pub(crate) const fn length_encoded_len(len: usize) -> usize {
+    if len <= 127 {
+        1
+    } else if len <= 0xFF {
+        2
+    } else if len <= 0xFFFF {
+        3
+    } else if len <= 0xFF_FFFF {
+        4
+    } else {
+        5
+    }
+}
+
+/// Returns the number of bytes needed for base-128 variable-length encoding.
+///
+/// Used for OID subidentifier encoding (X.690 Section 8.19.2).
+#[inline]
+pub(crate) const fn base128_len(value: u32) -> usize {
+    if value == 0 {
+        return 1;
+    }
+    // Count 7-bit groups needed: ceil(log2(value+1) / 7)
+    // For u32, this is at most 5 bytes
+    if value < 0x80 {
+        1
+    } else if value < 0x4000 {
+        2
+    } else if value < 0x20_0000 {
+        3
+    } else if value < 0x1000_0000 {
+        4
+    } else {
+        5
+    }
+}
+
+/// Returns the number of content bytes needed to encode a signed i32 in BER.
+#[inline]
+pub(crate) fn integer_content_len(value: i32) -> usize {
+    super::encode::encode_integer_stack(value).1
+}
+
+/// Returns the number of content bytes needed to encode an unsigned u32 in BER.
+#[inline]
+pub(crate) const fn unsigned32_content_len(value: u32) -> usize {
+    if value == 0 {
+        return 1;
+    }
+
+    let bytes = value.to_be_bytes();
+
+    // Skip leading zeros, but add a 0x00 prefix if MSB is set
+    if bytes[0] != 0 {
+        if bytes[0] & 0x80 != 0 { 5 } else { 4 }
+    } else if bytes[1] != 0 {
+        if bytes[1] & 0x80 != 0 { 4 } else { 3 }
+    } else if bytes[2] != 0 {
+        if bytes[2] & 0x80 != 0 { 3 } else { 2 }
+    } else if bytes[3] & 0x80 != 0 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Returns the number of content bytes needed to encode an unsigned u64 in BER.
+#[inline]
+pub(crate) const fn unsigned64_content_len(value: u64) -> usize {
+    if value == 0 {
+        return 1;
+    }
+
+    let bytes = value.to_be_bytes();
+
+    // Find first non-zero byte and check if padding needed
+    if bytes[0] != 0 {
+        if bytes[0] & 0x80 != 0 { 9 } else { 8 }
+    } else if bytes[1] != 0 {
+        if bytes[1] & 0x80 != 0 { 8 } else { 7 }
+    } else if bytes[2] != 0 {
+        if bytes[2] & 0x80 != 0 { 7 } else { 6 }
+    } else if bytes[3] != 0 {
+        if bytes[3] & 0x80 != 0 { 6 } else { 5 }
+    } else if bytes[4] != 0 {
+        if bytes[4] & 0x80 != 0 { 5 } else { 4 }
+    } else if bytes[5] != 0 {
+        if bytes[5] & 0x80 != 0 { 4 } else { 3 }
+    } else if bytes[6] != 0 {
+        if bytes[6] & 0x80 != 0 { 3 } else { 2 }
+    } else if bytes[7] & 0x80 != 0 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Encode a length value into the buffer (returns bytes in reverse order for prepending).
+///
+/// Uses short form for lengths <= 127, long form otherwise. SNMP's supported
+/// BER length domain is capped at `u32::MAX`; larger host `usize` values are
+/// rejected rather than truncated into the four-octet long form.
+pub fn encode_length(len: usize) -> Result<([u8; 5], usize)> {
+    if len > u32::MAX as usize {
+        return Err(Error::InvalidMessage("BER length exceeds u32::MAX".into()).boxed());
+    }
+
+    let mut buf = [0u8; 5];
+
+    if len <= 127 {
+        // Short form
+        buf[0] = len as u8;
+        Ok((buf, 1))
+    } else if len <= 0xFF {
+        // Long form, 1 byte
+        buf[0] = len as u8;
+        buf[1] = 0x81;
+        Ok((buf, 2))
+    } else if len <= 0xFFFF {
+        // Long form, 2 bytes
+        buf[0] = len as u8;
+        buf[1] = (len >> 8) as u8;
+        buf[2] = 0x82;
+        Ok((buf, 3))
+    } else if len <= 0xFF_FFFF {
+        // Long form, 3 bytes
+        buf[0] = len as u8;
+        buf[1] = (len >> 8) as u8;
+        buf[2] = (len >> 16) as u8;
+        buf[3] = 0x83;
+        Ok((buf, 4))
+    } else {
+        // Long form, 4 bytes
+        buf[0] = len as u8;
+        buf[1] = (len >> 8) as u8;
+        buf[2] = (len >> 16) as u8;
+        buf[3] = (len >> 24) as u8;
+        buf[4] = 0x84;
+        Ok((buf, 5))
+    }
+}
+
+/// Parse a BER length from a byte slice, returning `Some((length, bytes_consumed))`.
+///
+/// Returns `None` if the data is empty, uses indefinite form, or contains an
+/// invalid or unsupported encoding. This is the infallible variant for contexts
+/// that use `Option`-based error handling rather than `Result`.
+pub(crate) fn parse_ber_length(data: &[u8]) -> Option<(usize, usize)> {
+    if data.is_empty() {
+        return None;
+    }
+
+    let first = data[0];
+
+    if first < 0x80 {
+        let len = first as usize;
+        if len > data.len() - 1 {
+            return None;
+        }
+        return Some((len, 1));
+    }
+
+    if first == 0x80 {
+        // Indefinite form - not supported
+        return None;
+    }
+
+    // Long form
+    let num_octets = (first & 0x7F) as usize;
+    if num_octets == 0 || num_octets > 8 || data.len() < 1 + num_octets {
+        return None;
+    }
+
+    let mut len: usize = 0;
+    for i in 0..num_octets {
+        len = len.checked_mul(256)?.checked_add(data[1 + i] as usize)?;
+    }
+
+    // The declared content must fit the enclosing input. Callers can therefore
+    // use checked offsets without a second, contradictory global size policy.
+    if len > data.len() - (1 + num_octets) {
+        return None;
+    }
+
+    Some((len, 1 + num_octets))
+}
+
+/// Decode a length from bytes, returning (length, `bytes_consumed`)
+///
+/// The `base_offset` parameter is used to report error offsets correctly
+/// when this is called from within a decoder. The `target` parameter provides
+/// the target address for error context.
+pub fn decode_length(
+    data: &[u8],
+    base_offset: usize,
+    target: Option<SocketAddr>,
+) -> Result<(usize, usize)> {
+    decode_length_with_origin(data, base_offset, DecodeErrorOrigin::Packet, target)
+}
+
+pub(crate) fn decode_length_with_origin(
+    data: &[u8],
+    base_offset: usize,
+    origin: DecodeErrorOrigin,
+    target: Option<SocketAddr>,
+) -> Result<(usize, usize)> {
+    let failure = |offset, kind| {
+        let mut error = DecodeError::with_origin(origin, offset, kind);
+        error.peer = target;
+        Error::Decode(error).boxed()
+    };
+
+    if data.is_empty() {
+        tracing::debug!(target: "async_snmp::ber", { snmp.offset = %base_offset, kind = %DecodeErrorKind::TruncatedData }, "truncated data: unexpected end of input in length");
+        return Err(failure(base_offset, DecodeErrorKind::TruncatedData));
+    }
+
+    let first = data[0];
+
+    if first == 0x80 {
+        // Indefinite length - rejected per net-snmp behavior
+        tracing::debug!(target: "async_snmp::ber", { snmp.offset = %base_offset, kind = %DecodeErrorKind::IndefiniteLength }, "indefinite length encoding not supported");
+        return Err(failure(base_offset, DecodeErrorKind::IndefiniteLength));
+    }
+
+    if first & 0x80 == 0 {
+        // Short form
+        Ok((first as usize, 1))
+    } else {
+        // Long form
+        let num_octets = (first & 0x7F) as usize;
+
+        if num_octets == 0 {
+            tracing::debug!(target: "async_snmp::ber", { snmp.offset = %base_offset, kind = %DecodeErrorKind::InvalidLength }, "invalid length encoding: zero octets in long form");
+            return Err(failure(base_offset, DecodeErrorKind::InvalidLength));
+        }
+
+        if num_octets > 8 {
+            // Net-snmp on 64-bit rejects > sizeof(long) = 8 length octets.
+            tracing::debug!(target: "async_snmp::ber", { snmp.offset = %base_offset, kind = %DecodeErrorKind::LengthTooLong { octets: num_octets } }, "length encoding too long");
+            return Err(failure(
+                base_offset,
+                DecodeErrorKind::LengthTooLong { octets: num_octets },
+            ));
+        }
+
+        if data.len() < 1 + num_octets {
+            tracing::debug!(target: "async_snmp::ber", { snmp.offset = %base_offset, kind = %DecodeErrorKind::InsufficientData { needed: 1 + num_octets, available: data.len() } }, "truncated data in length field");
+            return Err(failure(
+                base_offset,
+                DecodeErrorKind::InsufficientData {
+                    needed: 1 + num_octets,
+                    available: data.len(),
+                },
+            ));
+        }
+
+        let mut len: usize = 0;
+        for i in 0..num_octets {
+            len = len
+                .checked_mul(256)
+                .and_then(|value| value.checked_add(data[1 + i] as usize))
+                .ok_or_else(|| failure(base_offset + i + 1, DecodeErrorKind::IntegerOverflow))?;
+        }
+
+        Ok((len, 1 + num_octets))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_short_form() {
+        assert_eq!(decode_length(&[0], 0, None).unwrap(), (0, 1));
+        assert_eq!(decode_length(&[127], 0, None).unwrap(), (127, 1));
+        assert_eq!(decode_length(&[1], 0, None).unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn test_long_form_1_byte() {
+        assert_eq!(decode_length(&[0x81, 128], 0, None).unwrap(), (128, 2));
+        assert_eq!(decode_length(&[0x81, 255], 0, None).unwrap(), (255, 2));
+    }
+
+    #[test]
+    fn test_long_form_2_bytes() {
+        assert_eq!(
+            decode_length(&[0x82, 0x01, 0x00], 0, None).unwrap(),
+            (256, 3)
+        );
+        assert_eq!(
+            decode_length(&[0x82, 0xFF, 0xFF], 0, None).unwrap(),
+            (65535, 3)
+        );
+    }
+
+    #[test]
+    fn test_indefinite_rejected() {
+        assert!(decode_length(&[0x80], 0, None).is_err());
+    }
+
+    #[test]
+    fn test_encode_short() {
+        let (buf, len) = encode_length(0).unwrap();
+        assert_eq!(&buf[..len], &[0]);
+
+        let (buf, len) = encode_length(127).unwrap();
+        assert_eq!(&buf[..len], &[127]);
+    }
+
+    #[test]
+    fn test_encode_long() {
+        let (buf, len) = encode_length(128).unwrap();
+        assert_eq!(&buf[..len], &[128, 0x81]);
+
+        let (buf, len) = encode_length(256).unwrap();
+        assert_eq!(&buf[..len], &[0, 1, 0x82]);
+    }
+
+    #[test]
+    fn test_accept_oversized_length_encoding() {
+        // Non-minimal length encodings are valid per X.690 Section 8.1.3.5 Note 2
+        // 0x82 0x00 0x05 = length 5 using 2 bytes (minimal would be 0x05)
+        let result = decode_length(&[0x82, 0x00, 0x05], 0, None);
+        assert_eq!(result.unwrap(), (5, 3));
+
+        // 0x81 0x01 = length 1 using long form (non-minimal, minimal would be 0x01)
+        let result = decode_length(&[0x81, 0x01], 0, None);
+        assert_eq!(result.unwrap(), (1, 2));
+
+        // 0x82 0x00 0x7F = length 127 using 2 bytes (non-minimal, minimal would be 0x7F)
+        let result = decode_length(&[0x82, 0x00, 0x7F], 0, None);
+        assert_eq!(result.unwrap(), (127, 3));
+
+        // 0x83 0x00 0x00 0x80 = length 128 using 3 bytes (non-minimal, minimal would be 0x81 0x80)
+        let result = decode_length(&[0x83, 0x00, 0x00, 0x80], 0, None);
+        assert_eq!(result.unwrap(), (128, 4));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn encode_rejects_unrepresentable_length_without_truncation() {
+        let (buf, len) = encode_length(u32::MAX as usize).unwrap();
+        assert_eq!(&buf[..len], &[0xff, 0xff, 0xff, 0xff, 0x84]);
+
+        let error = encode_length(u32::MAX as usize + 1).unwrap_err();
+        assert!(
+            matches!(*error, Error::InvalidMessage(ref message) if message.contains("u32::MAX"))
+        );
+    }
+
+    #[test]
+    fn test_length_encoded_len() {
+        assert_eq!(length_encoded_len(0), 1);
+        assert_eq!(length_encoded_len(127), 1);
+        assert_eq!(length_encoded_len(128), 2);
+        assert_eq!(length_encoded_len(255), 2);
+        assert_eq!(length_encoded_len(256), 3);
+        assert_eq!(length_encoded_len(65535), 3);
+        assert_eq!(length_encoded_len(65536), 4);
+    }
+
+    #[test]
+    fn test_base128_len() {
+        assert_eq!(base128_len(0), 1);
+        assert_eq!(base128_len(127), 1);
+        assert_eq!(base128_len(128), 2);
+        assert_eq!(base128_len(16_383), 2);
+        assert_eq!(base128_len(16_384), 3);
+        assert_eq!(base128_len(2_097_151), 3);
+        assert_eq!(base128_len(2_097_152), 4);
+        assert_eq!(base128_len(268_435_455), 4);
+        assert_eq!(base128_len(268_435_456), 5);
+        assert_eq!(base128_len(u32::MAX), 5);
+    }
+
+    #[test]
+    fn test_integer_content_len() {
+        // Zero
+        assert_eq!(integer_content_len(0), 1);
+        // Small positive
+        assert_eq!(integer_content_len(1), 1);
+        assert_eq!(integer_content_len(127), 1);
+        // Needs padding byte
+        assert_eq!(integer_content_len(128), 2);
+        assert_eq!(integer_content_len(255), 2);
+        // Larger values
+        assert_eq!(integer_content_len(256), 2);
+        assert_eq!(integer_content_len(32767), 2);
+        assert_eq!(integer_content_len(32768), 3);
+        // Negative
+        assert_eq!(integer_content_len(-1), 1);
+        assert_eq!(integer_content_len(-128), 1);
+        assert_eq!(integer_content_len(-129), 2);
+        // Extremes
+        assert_eq!(integer_content_len(i32::MAX), 4);
+        assert_eq!(integer_content_len(i32::MIN), 4);
+    }
+
+    #[test]
+    fn test_unsigned32_content_len() {
+        assert_eq!(unsigned32_content_len(0), 1);
+        assert_eq!(unsigned32_content_len(127), 1);
+        assert_eq!(unsigned32_content_len(128), 2); // needs padding
+        assert_eq!(unsigned32_content_len(255), 2); // needs padding
+        assert_eq!(unsigned32_content_len(256), 2);
+        assert_eq!(unsigned32_content_len(u32::MAX), 5); // needs padding
+    }
+
+    #[test]
+    fn test_unsigned64_content_len() {
+        assert_eq!(unsigned64_content_len(0), 1);
+        assert_eq!(unsigned64_content_len(127), 1);
+        assert_eq!(unsigned64_content_len(128), 2); // needs padding
+        assert_eq!(unsigned64_content_len(u64::MAX), 9); // needs padding
+    }
+
+    #[test]
+    fn test_long_form_5_to_8_byte_length_accepted() {
+        // Net-snmp on 64-bit allows up to sizeof(long)=8 length octets.
+        // Non-minimal 5-byte encoding of length 5.
+        let result = decode_length(&[0x85, 0x00, 0x00, 0x00, 0x00, 0x05], 0, None);
+        assert_eq!(result.unwrap(), (5, 6));
+
+        // 8-byte encoding of length 1.
+        let result = decode_length(
+            &[0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+            0,
+            None,
+        );
+        assert_eq!(result.unwrap(), (1, 9));
+
+        // 9 bytes (> 8) must still be rejected.
+        let result = decode_length(
+            &[0x89, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+            0,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ber_length_rejects_oversized() {
+        // Long-form length of usize::MAX (0x88 + eight 0xFF octets) must be
+        // rejected rather than returned, which would overflow `pos + len`
+        // arithmetic in callers.
+        let huge = [0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert_eq!(parse_ber_length(&huge), None);
+
+        // Declared lengths exceeding the remaining buffer are rejected in
+        // both forms.
+        assert_eq!(parse_ber_length(&[0x05, 0x00, 0x00]), None);
+        assert_eq!(parse_ber_length(&[0x81, 0x05, 0x00, 0x00]), None);
+        assert_eq!(parse_ber_length(&[0x02, 0x00, 0x00]), Some((2, 1)));
+
+        // Long-form length that exactly matches the remaining buffer is
+        // accepted. 0x81 0x80 = 128 content bytes.
+        let mut ok = vec![0x81, 0x80];
+        ok.extend(std::iter::repeat_n(0u8, 128));
+        assert_eq!(parse_ber_length(&ok), Some((128, 2)));
+    }
+
+    #[test]
+    fn lengths_above_previous_two_mib_policy_are_structurally_accepted() {
+        let length = 3 * 1024 * 1024;
+        let encoded = [
+            0x84,
+            ((length >> 24) & 0xff) as u8,
+            ((length >> 16) & 0xff) as u8,
+            ((length >> 8) & 0xff) as u8,
+            (length & 0xff) as u8,
+        ];
+        assert_eq!(decode_length(&encoded, 0, None).unwrap(), (length, 5));
+    }
+
+    mod proptests {
+        use super::*;
+        use crate::ber::EncodeBuf;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn integer_content_len_matches_encoder(value: i32) {
+                // Encode the integer: tag (1 byte) + length (1 byte for i32) + content
+                let mut buf = EncodeBuf::new();
+                buf.push_integer(value);
+                let encoded_len = buf.len();
+                // For i32, content is at most 4 bytes, so length encoding is always 1 byte
+                // Total = 1 (tag) + 1 (length) + content_len
+                let actual_content_len = encoded_len - 2;
+                prop_assert_eq!(
+                    integer_content_len(value),
+                    actual_content_len,
+                    "Mismatch for value {}: computed={}, actual={}",
+                    value,
+                    integer_content_len(value),
+                    actual_content_len
+                );
+            }
+
+            #[test]
+            fn unsigned32_content_len_matches_encoder(value: u32) {
+                let mut buf = EncodeBuf::new();
+                buf.push_unsigned32(crate::ber::tag::application::COUNTER32, value);
+                let encoded_len = buf.len();
+                // For u32, content is at most 5 bytes, so length encoding is always 1 byte
+                let actual_content_len = encoded_len - 2;
+                prop_assert_eq!(
+                    unsigned32_content_len(value),
+                    actual_content_len,
+                    "Mismatch for value {}", value
+                );
+            }
+
+            #[test]
+            fn unsigned64_content_len_matches_encoder(value: u64) {
+                let mut buf = EncodeBuf::new();
+                buf.push_integer64(value);
+                let encoded_len = buf.len();
+                // For u64, content is at most 9 bytes, so length encoding is always 1 byte
+                let actual_content_len = encoded_len - 2;
+                prop_assert_eq!(
+                    unsigned64_content_len(value),
+                    actual_content_len,
+                    "Mismatch for value {}", value
+                );
+            }
+        }
+    }
+}

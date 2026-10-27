@@ -8,6 +8,8 @@ pub struct Selection {
     pub recovery: bool,
     pub repeat: bool,
     pub hardware_log: bool,
+    /// Event-only verified fault traps are an independent, opt-in category.
+    pub snmp_trap: bool,
     /// None preserves the severity-based selection of existing installations.
     /// An explicit choice controls query events independently of hardware severity.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -21,12 +23,20 @@ impl Default for Selection {
             recovery: true,
             repeat: true,
             hardware_log: true,
+            snmp_trap: false,
             monitoring: None,
         }
     }
 }
 impl Selection {
     pub fn accepts(&self, key: &str, kind: &str, health: crate::model::Health) -> bool {
+        if kind == "snmp_trap" {
+            return self.snmp_trap
+                && matches!(
+                    health,
+                    crate::model::Health::Warning | crate::model::Health::Critical
+                );
+        }
         // Match the event log's category, including incomplete coverage and fatal
         // collection errors. A vendor log cannot become a monitoring event by key.
         let monitoring =

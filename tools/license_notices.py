@@ -21,5 +21,6 @@ for name in ['vue','@vue/shared','@vue/reactivity','@vue/runtime-core','@vue/run
         for f in base.iterdir():
             if f.is_file() and f.name.lower().startswith(('license','notice')):sections.append(f.read_text(errors='replace'))
 sections.append('\n'+'='*72+'\nmusl 1.2.5\n'+a.musl_copyright.read_text())
-(root/'THIRD_PARTY_NOTICES.txt').write_text('\n'.join(sections))
+# Keep dependency wording while normalizing insignificant trailing whitespace.
+(root/'THIRD_PARTY_NOTICES.txt').write_text('\n'.join(line.rstrip(' \t') for line in '\n'.join(sections).splitlines())+'\n')
 print(f'Collected notices for {len(metadata["packages"])-1} Rust packages, Vue runtime, and musl')

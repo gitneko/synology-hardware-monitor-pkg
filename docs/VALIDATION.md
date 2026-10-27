@@ -1,5 +1,156 @@
 # Validation and evidence boundaries
 
+Current package: **0.9.0-0064**. Local source/reference/package checks,
+authorized live read-only collector runs and user-reported NAS acceptance are
+separate evidence. The [compatibility matrix](HARDWARE-COMPATIBILITY.md) records
+actual combinations; [SNMP](SNMP.md) describes operation and limitations.
+Historical results below retain their original versions and dates.
+
+## Current acceptance
+
+The following are **user-confirmed for the reported deployment**, not blanket
+coverage of every model, firmware, security variant or physical failure:
+
+| Date | Accepted workflow |
+|---|---|
+| 21 October 2026 | Installation of 0.9.0-0051 and Synology DSM polling profile |
+| 23 October 2026 | Dell iDRAC9 v3 traps after the optional-context correction (0059), immediate mapped alarms and configured email/DSM notification workflow |
+| 24 October 2026 | Trap reception, reception after package restart and after DSM reboot, following delivery of compatibility visibility (0061) |
+| 27 October 2026 | HPE iLO, Generic and Network Generic SNMP operation |
+| 27 October 2026 | Native DSM upgrade **0.8.0-0043 → 0.9.0-0062**, application backup and restore |
+| 27 October 2026 | Incorrect credentials, unknown sender, changed Engine-ID checks, fault → recovery, operator acknowledgement and **duplicate handling** |
+
+The changed-ID report describes rejection already on save; it does not establish
+a separately observed live replacement-engine datagram test. Generic/Network/HPE
+confirmations do not supply an exact model/firmware/security matrix. The DSM
+polling target model/version is unrecorded and is not inferred from the hosting
+NAS. Backup acceptance does not imply all historical archive variants or
+cross-NAS restore. Restart confirmation does not enumerate every port's manual
+capability/intervention state.
+
+Duplicate acceptance covers the reported incident workflow: repeated ongoing
+fault plus confirming poll does not create another immediate state-alarm
+submission; confirmed recovery followed by a new fault creates a new incident.
+Periodic reminders remain intentional. The bounded transport cache and positive
+shared-occurrence requirement for history suppression are described in [SNMP](SNMP.md#alarms-duplicate-handling-and-notifications).
+
+**Agreed release scope:** APC PowerNet, Eaton xUPS and generic RFC 1628 profiles
+ship **untested on real UPS hardware**. No suitable hardware is available;
+synthetic/reference coverage is not hardware interoperability. Future hardware
+tests are not a blocker for this agreed scope. DSM Package Center downgrade
+0.9.0 → 0.8.0 is outside the supported acceptance path, separate from local
+failed-migration/restore transaction recovery. No downgrade workaround is offered.
+
+The reported core SNMP acceptance workflow is complete. Broader targets,
+unreported security variants, long-running load and full DSM role integration
+remain additional coverage, not a reopening of those accepted checks. See
+[NAS acceptance](NAS-ACCEPTANCE.md) and [Roadmap](ROADMAP.md).
+
+## Local regression coverage
+
+Independent Net-SNMP agents/traps plus controlled loopback HTTPS/SMTP exercise
+the actual product, without contacting a controller, NAS or real mail recipient.
+The aggregate wrapper runs the following native and static executable suites:
+
+| Suite | Verified contract |
+|---|---|
+| Polling | v1, v2c, v3 SHA-1/AES-128 and SHA-256/AES-128, actual probe/save/poll, wrong credentials, sparse walks, budgets, redaction and partial input |
+| Receiver | Saved-target enrollment and explicit approval, source/engine/user/context/security rejection, IPv4/IPv6, rebind/rollback, restart, no Inform ACK and bounded receipt retention |
+| Alarm / SMTP | Immediate provisional fault, old in-flight OK ordering, one submission for trap plus confirmation, poll-owned recovery, new identical-payload fault and shared submission gates |
+| Profiles | Synology enums/zero/sparse rows, Generic optional groups, Network durable active-link baseline/rates/reset/missing input, HPE population/units/capture replay |
+| UPS | Three profiles × v1/v2c/v3-SHA1/v3-SHA256; typed states/units, sparse alarms/phases, double-count proof, new-condition acknowledgement, partial retention and recovery |
+| Load | Default package build: two 60-second receiver/alarm scenarios, invalid/unknown/spoofed-eligible bursts, continuing polls/API and local SMTP; explicit skip mode is recorded |
+| Patched library | Five unit tests and 20 independent reference cases: multi-engine/shared-user routing, wire crypto/security, long silence, injected clocks, monotonic seeding, malformed corpus, cancellation and v1 conversion |
+| Persistence / UI | Schema migration, separate secrets, restore gates/epochs, history/CSV, configuration round trips, bilingual/placeholder parity, viewer controls and text escaping |
+
+These are bounded reference/corpus tests, not exhaustive fuzzing, maximum NAS
+sizing, complete memory erasure or a full security audit. USM time checks do not
+provide exact-once incident delivery. A valid error Report/cache entry alone is
+insufficient for enrollment: a real successful read at configured authPriv is
+required. Source/patch checksums and required licenses remain maintained;
+[Development](DEVELOPMENT.md#snmp-dependency-and-reference-tests) gives reproduction
+commands and the patched API boundary.
+
+The 0063 validation baseline passed 234 library tests and three binary tests
+(with two intentionally ignored tests in total), ten Rust integration tests,
+76 frontend tests, Clippy, the real HTTP regression and static package checks.
+Those counts describe that baseline, not a freshly repeated full suite for every
+later documentation change. Current cleanup checks and artifact evidence are
+recorded under build 0064 below.
+
+## Build 0064: spacing and documentation consolidation
+
+The event-retention note now aligns with the panel title/actions. The saved
+sender verification button has a 20-pixel gap before the polling-interval row.
+The production UI and both locations were checked in an isolated local browser
+with a disabled synthetic SNMP device; all 76 frontend tests passed. No live
+controller or NAS configuration was changed. Native DSM appearance of this
+specific spacing change is not independently claimed.
+
+The maintained SNMP guide consolidates setup, profile contracts, security,
+clock compatibility, alarms, diagnostics and troubleshooting. Temporary phase,
+review and feature-result reports are removed after their durable content is
+transferred; source/license/patch provenance and regression fixtures remain.
+Reference tools have descriptive names; package checks require maintained docs
+and validate local documentation links/anchors in source and the SPK. The receiver load fixture also restores its regular poll interval after the
+clock-hint case had deliberately postponed it for a day; otherwise its unchanged
+60-second automatic-poll assertion necessarily failed. This is a test setup
+correction, not a runtime scheduling change. The final
+package and tool verification are recorded with the delivered artifact; no
+hosted CI run, publication, commit or push is implied by local checks.
+
+## Build 0063: total event count
+
+The former Events counter counted grouped records from the latest-100 dashboard
+window. It now uses a separate full retained-table `event_count`, while the header
+separates displayed messages, stored events and the latest-100 selection. Store
+and full local HTTP regressions check 150 retained records, 50 new records and
+clearing to zero while only 100 records load. Retention, CSV and alarms remain
+unchanged. Native DSM acceptance of this specific counter correction has not
+been separately reported.
+
+## Controller clock compatibility evidence
+
+The reported iDRAC9 firmware **7.00.00.185**, MEM7114 test, used trap boots
+**1/time 388** after restart while the authenticated saved-target check reported
+**boots 113** (last accepted trap boots 111). The differing trap/responder clocks
+explain strict timeliness rejection; this is not an ordinary increasing boots
+case or proof that all real hardware-event traps behave identically.
+
+Build 0060 introduced explicit default-off polling hints; 0061 made their
+receive time and unconfirmed freshness prominent. Local independent packets
+prove the reported tuple triggers a real primary poll only with compatibility
+enabled, cannot lower the strict baseline, cannot update accepted receipt time,
+and still rejects bad signatures/privacy, unapproved identity, contexts and
+lower security levels. Hints are volatile status, never normal receipt/event/
+direct-alarm evidence. Subsequent user acceptance is recorded above; no blanket
+controller-restart/firmware matrix is inferred.
+
+## HPE capture and direct-upgrade diagnosis
+
+A supplied DL20 Gen11/iLO 6 1.79 capture contained matching sets of 2,041 HPE
+OIDs in v2c/v3. The sanitized 69-row fixture preserves types/indexes while
+replacing identifiers. Local replay verified one populated/one empty PSU bay,
+empty DIMMs, three fan values 7/7/41, poweredOff and unknown empty CPQIDA storage.
+Firmware boundaries and original MIB/advisory sources establish percent units
+only on identified iLO 5 >=3.06 / iLO 6 >=1.61. Removal history survives process
+restart; missing presence cannot recover. Capture replay is not a new BMC query.
+
+The earlier 0054 report was RS2421RP+/DSM 7.4.1 working after prior development
+installs, RS2416RP+/7.3.2 working after repair, and DS220+/7.4.1 failing with
+startup timeout. A local actual-0054/archived-0018 upgrade with a six-second
+SQLite lock reproduced the five-second failure; it does not establish the NAS's
+precise latency cause. Build 0055 added explicit post-install initialization,
+120-second readiness and 30-second initialization contention budget. The same
+local delayed start then succeeded. The actual-product suite covers fresh
+install, legacy preservation, repeated repair, delayed start and failed
+migration/retry with disabled polling/delivery; it also verifies a complete
+synced pre-migration database/key pair. The user's later successful
+0043 → 0062 upgrade is accepted, without assigning that result to each earlier
+model-specific failure. Package downgrade remains unsupported.
+
+## Historical validation
+
 Reviewed for 0.8.0-0018 on 18 October 2026. Build 0017 passed 50 Rust and 27 frontend tests. Build 0018 changes packaging/CI/documentation and adds seven isolated release-publication tests. Current package hashes and source identity are recorded in `dist/current/latest-assets/build-manifest.json` and `SHA256SUMS`; test output is retained in Actions logs. Source archives intentionally exclude `dist` and private runtime state.
 
 ## Current confirmed platform and systems (19 October 2026)
@@ -17,7 +168,7 @@ Live read-only diagnosis reproduced all 28 unknown rows: four fans and 19 temper
 
 The corrected development collector completed 51 available resources in 6.169 seconds with no query failures. It explained all 28 raw Unknown observations as 23 absent, one informational and four empty-controller representations. The actual failed SmartStorage disk remained Critical and the device's overall status remained Critical. Exact certificate pinning preceded authentication; temporary local state had notifications disabled and was removed afterward. Production configuration was not changed.
 
-Local checks passed: 110 Rust tests, 43 frontend tests, 19 packaging/release tests, formatting and Clippy with warnings denied. The sanitized fixture and HTTPS integration cover all 28 rows alongside a real-shaped Critical SmartStorage drive. Negative cases cover contradictory presence, explicit faults/conditions, untyped measurements outside PowerControl, absent/unknown controller evidence, mixed protocols, attached inventory, null/advertised Volumes, paging and invalid counts. Retained faults and their operator acknowledgements survive an absent reading; raw Unknown does not become OK or create recovery. Native DSM installation remains a [target check](NAS-ACCEPTANCE.md#build-0034-ilo-applicability-pending-nas-acceptance).
+Local checks passed: 110 Rust tests, 43 frontend tests, 19 packaging/release tests, formatting and Clippy with warnings denied. The sanitized fixture and HTTPS integration cover all 28 rows alongside a real-shaped Critical SmartStorage drive. Negative cases cover contradictory presence, explicit faults/conditions, untyped measurements outside PowerControl, absent/unknown controller evidence, mixed protocols, attached inventory, null/advertised Volumes, paging and invalid counts. Retained faults and their operator acknowledgements survive an absent reading; raw Unknown does not become OK or create recovery. Native DSM installation remains a [target check](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks).
 
 ## Build 0033 manual recorded-event email replay (20 October 2026)
 
@@ -25,7 +176,7 @@ The administrator-only Events action renders the selected recorded event with sa
 
 Local validation passed 105 Rust tests, 42 frontend tests, 19 packaging/release tests, formatting and Clippy with warnings denied. New cases cover original event identity/time and literal placeholders, one recipient, preview ownership/expiry, duplicate confirmation, stable retry IDs across restart, terminal failures, SMTP-setting changes, clearing, unchanged acknowledged alarms, recovery/log/query events, administrator/CSRF/submission-gate enforcement and archive formats 1 through 4. Restore keeps submitted history but cancels queued jobs and discards previews.
 
-The actual daemon worker passed a loopback SMTP test with automatic email disabled: one manual message reached only the selected synthetic recipient with the expected subject, literal body content and Message-ID; restarting did not resubmit it. The German/English dialog was also exercised with synthetic browser data, including recipient selection, preview, separate history and a simulated lost submission response followed by confirmation of the same ID. Both requests referred to one job. Browser fixture submission does not imply real SMTP delivery; the separate loopback test exercised SMTP. No production recipient or alarm server was contacted. Native DSM installation and parser acceptance remain [target checks](NAS-ACCEPTANCE.md#build-0033-manual-email-replay-pending-nas-acceptance).
+The actual daemon worker passed a loopback SMTP test with automatic email disabled: one manual message reached only the selected synthetic recipient with the expected subject, literal body content and Message-ID; restarting did not resubmit it. The German/English dialog was also exercised with synthetic browser data, including recipient selection, preview, separate history and a simulated lost submission response followed by confirmation of the same ID. Both requests referred to one job. Browser fixture submission does not imply real SMTP delivery; the separate loopback test exercised SMTP. No production recipient or alarm server was contacted. Native DSM installation and parser acceptance remain [target checks](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks).
 
 ## Build 0032 HPE SmartStorage discovery and alarm dependencies (20 October 2026)
 
@@ -35,7 +186,7 @@ Build 0032 follows the advertised physical/data-drive, enclosure and unconfigure
 
 The corrected Rust collector completed an authorized live poll in 5.484 seconds: 51 resources available, complete log coverage (290 entries), physical disk `1I:1:1` Critical and disk `1I:1:2` OK. All five linked System/Chassis/SmartStorage/controller/logical-drive summaries grouped to the critical disk. Exact certificate pinning preceded credentials; temporary local state had delivery disabled and was removed afterward. Hardware configuration and production package state were not changed.
 
-Local checks passed: 96 Rust tests, 38 frontend tests, 19 packaging/release tests, formatting and Clippy with warnings denied. The HPE fixture and HTTPS integration test cover the real advertised link structure, physical discovery through either controller or logical-drive membership, both delivery queues, derived summary assessment, independent controller faults, new faults after acknowledgement, missing associations and legacy snapshots. Package integration and checksum results are recorded with the build artifacts. NAS installation and native UI acceptance remain pending; see [NAS acceptance](NAS-ACCEPTANCE.md#build-0032-hpe-smartstorage-pending-nas-acceptance).
+Local checks passed: 96 Rust tests, 38 frontend tests, 19 packaging/release tests, formatting and Clippy with warnings denied. The HPE fixture and HTTPS integration test cover the real advertised link structure, physical discovery through either controller or logical-drive membership, both delivery queues, derived summary assessment, independent controller faults, new faults after acknowledgement, missing associations and legacy snapshots. Package integration and checksum results are recorded with the build artifacts. NAS installation and native UI acceptance remain pending; see [NAS acceptance](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks).
 
 These records apply to the tested systems. Earlier build sections below describe the evidence and outstanding checks at that stage of development; their historical limitations do not replace this current compatibility status. Model/firmware details are maintained in [Hardware compatibility](HARDWARE-COMPATIBILITY.md).
 
@@ -43,7 +194,7 @@ These records apply to the tested systems. Earlier build sections below describe
 
 Package assembly now includes German/English uninstall wizard generators and an opt-in `postuninst` cleanup hook. The checkbox starts unchecked; no selection preserves the existing configuration. The generator selects the native JSON form before DSM 7.2.2 and a Vue 2 JSONP form from 7.2.2 onward, using DSM's trusted version metadata. The hook requires an actual `UNINSTALL`, the expected package identity and the exact `true` choice. It clears only the contents of the validated persistent package configuration directory, including upgrade snapshots and keys, without following nested symlinks or requesting root privileges.
 
-Local source checks passed: 19 packaging/release tests (including ten new uninstall tests) and 38 frontend tests. Uninstall checks cover retention, explicit deletion, upgrade/status guards, invalid inputs, version selection, both localized wizard formats, checkbox changes/reset, hidden files and SQLite sidecars, volume/system configuration layouts, unrelated files, external/dangling symlinks, repeated cleanup and reported deletion failures. SPK validation repeats the uninstall checks against scripts extracted from the built archive. See [uninstall behavior](UNINSTALL.md) and the [pending NAS checks](NAS-ACCEPTANCE.md#build-0031-optional-uninstall-cleanup-pending-nas-acceptance). No NAS installation, uninstallation or live data deletion was performed; native rendering, choice propagation and lifecycle timing remain pending target acceptance.
+Local source checks passed: 19 packaging/release tests (including ten new uninstall tests) and 38 frontend tests. Uninstall checks cover retention, explicit deletion, upgrade/status guards, invalid inputs, version selection, both localized wizard formats, checkbox changes/reset, hidden files and SQLite sidecars, volume/system configuration layouts, unrelated files, external/dangling symlinks, repeated cleanup and reported deletion failures. SPK validation repeats the uninstall checks against scripts extracted from the built archive. See [uninstall behavior](UNINSTALL.md) and the [pending NAS checks](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks). No NAS installation, uninstallation or live data deletion was performed; native rendering, choice propagation and lifecycle timing remain pending target acceptance.
 
 ## Build 0030 iDRAC9 empty S140 controller
 
@@ -214,7 +365,7 @@ Local checks passed: **147 Rust tests with local-dev enabled**, **48 frontend te
 
 The explicitly selected release-mode large test also passed: **1,800,000 distinct hardware-log rows**, a **2,643,951,616-byte SQLite database** and **2,376,001,980 bytes of logical archive records**, exported, inspected and restored under a different local vault key. Exact history counts, credential re-encryption, restored retention and paused devices were checked. Runtime was 90.45 seconds on this development host; `/usr/bin/time -v` measured **23,720 KiB peak RSS (23.2 MiB)** for the test process, excluding compilation. The final encrypted file was 34,353,208 bytes because this synthetic fixture has repetitive messages; its compression ratio and timing do not predict NAS performance. The test is ignored in the default suite and documented for explicit reruns with adequate disk space.
 
-The installable candidate is `dist/maintenance-0042/HardwareMonitor-0.8.0-0042-x86_64-dsm7-development.spk`. Local socket creation is prohibited (`PermissionError: [Errno 1] Operation not permitted`), so the Redfish/TLS, legacy TLS, SMTP, native CGI transfer and service-lifecycle integration suites cannot complete here. Their test paths remain in the normal unrestricted CI pipeline, including new device selection, raw download and chunk upload checks. These are environment-blocked checks, not passing evidence. Native DSM installation/download/upload and production-data acceptance remain open; see [NAS acceptance](NAS-ACCEPTANCE.md#build-0042-retention-device-log-selection-and-large-archives). No real NAS, device, production database or recipient was changed during this implementation.
+The installable candidate is `dist/maintenance-0042/HardwareMonitor-0.8.0-0042-x86_64-dsm7-development.spk`. Local socket creation is prohibited (`PermissionError: [Errno 1] Operation not permitted`), so the Redfish/TLS, legacy TLS, SMTP, native CGI transfer and service-lifecycle integration suites cannot complete here. Their test paths remain in the normal unrestricted CI pipeline, including new device selection, raw download and chunk upload checks. These are environment-blocked checks, not passing evidence. Native DSM installation/download/upload and production-data acceptance remain open; see [NAS acceptance](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks). No real NAS, device, production database or recipient was changed during this implementation.
 
 
 ## Build 0043: native download authentication and attachment preflight

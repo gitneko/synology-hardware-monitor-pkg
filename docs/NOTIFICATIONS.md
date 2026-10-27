@@ -2,7 +2,7 @@
 
 Hardware Monitor supports its own SMTP email client and independent native DSM desktop notifications. Both channels require global enablement, matching event filters and the per-device **Enable notifications for this device** option. Monitoring must also be enabled on the device. Events remain visible locally when delivery is disabled or filtered.
 
-The shared filters cover critical events, warnings, query warnings/failures, recoveries, reminders and new hardware-log entries. Hardware alarm reminders and hardware logs additionally need their severity selected. Recovery selection is independent of the severity switch. Reminder intervals are configured per device and must be at least five minutes.
+The shared filters cover critical events, warnings, query warnings/failures, recoveries, reminders, new hardware-log entries and a default-off **Verified SNMP trap events without component mapping** selection. This additional selection permits only verified known event-only faults and still requires the matching severity; tests, unknown OIDs, unverified input and recovery hints do not automatically notify. Mapped traps use the regular hardware alarm filters and canonical transition pipeline. Existing settings/archives without the new choice default it to off. Hardware alarm reminders and hardware logs additionally need their severity selected. Recovery selection is independent of the severity switch. Reminder intervals are configured per device and must be at least five minutes.
 
 ## Delivery behavior
 

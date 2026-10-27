@@ -1,0 +1,1340 @@
+//! Object Identifier (OID) type.
+//!
+//! OIDs are stored as `SmallVec<[u32; 16]>` to avoid heap allocation for common OIDs.
+//!
+//! `Oid` is a permissive tree and receive-side representation: empty or otherwise
+//! non-wire-valid values may exist in memory. Every outbound BER encoder validates
+//! OIDs and returns [`crate::Error::InvalidOid`] rather than emitting invalid bytes.
+
+use crate::error::internal::DecodeErrorKind;
+use crate::error::{DecodeError, Error, Result};
+use smallvec::SmallVec;
+use std::fmt;
+
+/// Maximum number of arcs (subidentifiers) allowed in an OID.
+///
+/// Per RFC 2578 Section 3.5: "there are at most 128 sub-identifiers in a value".
+///
+/// This limit is enforced during BER decoding via [`Oid::from_ber()`], and can
+/// be checked via [`Oid::validate_length()`] for OIDs constructed from other sources.
+pub const MAX_OID_LEN: usize = 128;
+
+/// Object Identifier.
+///
+/// Stored as a sequence of arc values (u32). Uses `SmallVec` to avoid
+/// heap allocation for OIDs with 16 or fewer arcs.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Oid {
+    arcs: SmallVec<[u32; 16]>,
+}
+
+impl Oid {
+    /// Create an empty OID.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            arcs: SmallVec::new(),
+        }
+    }
+
+    /// Create an OID from arc values.
+    ///
+    /// Accepts any iterator of `u32` values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// // From a Vec
+    /// let oid = Oid::new(vec![1, 3, 6, 1, 2, 1]);
+    /// assert_eq!(oid.arcs(), &[1, 3, 6, 1, 2, 1]);
+    ///
+    /// // From an array
+    /// let oid = Oid::new([1, 3, 6, 1]);
+    /// assert_eq!(oid.len(), 4);
+    ///
+    /// // From a range
+    /// let oid = Oid::new(0..5);
+    /// assert_eq!(oid.arcs(), &[0, 1, 2, 3, 4]);
+    /// ```
+    pub fn new(arcs: impl IntoIterator<Item = u32>) -> Self {
+        Self {
+            arcs: arcs.into_iter().collect(),
+        }
+    }
+
+    /// Create an OID from a slice of arcs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// let arcs = [1, 3, 6, 1, 2, 1, 1, 1, 0];
+    /// let oid = Oid::from_slice(&arcs);
+    /// assert_eq!(oid.to_string(), "1.3.6.1.2.1.1.1.0");
+    ///
+    /// // Empty slice creates an empty OID
+    /// let empty = Oid::from_slice(&[]);
+    /// assert!(empty.is_empty());
+    /// ```
+    #[must_use]
+    pub fn from_slice(arcs: &[u32]) -> Self {
+        Self {
+            arcs: SmallVec::from_slice(arcs),
+        }
+    }
+
+    /// Parse an OID from dotted string notation (e.g., "1.3.6.1.2.1.1.1.0").
+    ///
+    /// # Validation
+    ///
+    /// Parses the string format but does **not** validate arc constraints
+    /// per X.690 Section 8.19.4. Invalid OIDs like `"3.0"` (arc1 must be 0, 1, or 2)
+    /// or `"0.40"` (arc2 must be ≤39 when arc1 < 2) will parse successfully.
+    ///
+    /// To validate arc constraints, call [`validate()`](Self::validate) after parsing,
+    /// or use [`to_ber()`](Self::to_ber) which validates before encoding.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// // Valid OID
+    /// let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+    /// assert!(oid.validate().is_ok());
+    ///
+    /// // Invalid arc1 parses but fails validation
+    /// let invalid = Oid::parse("3.0").unwrap();
+    /// assert!(invalid.validate().is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self> {
+        // Accept leading-dot notation (e.g. ".1.3.6.1.2.1") used by net-snmp
+        // and common in SNMP documentation to indicate absolute OIDs.
+        let s = s.strip_prefix('.').unwrap_or(s);
+
+        if s.is_empty() {
+            return Ok(Self::empty());
+        }
+
+        let mut arcs = SmallVec::new();
+
+        for part in s.split('.') {
+            if part.is_empty() {
+                return Err(Error::InvalidOid(format!("'{s}': empty arc").into()).boxed());
+            }
+
+            let arc: u32 = part
+                .parse()
+                .map_err(|_| Error::InvalidOid(format!("'{s}': invalid arc").into()).boxed())?;
+
+            arcs.push(arc);
+        }
+
+        Ok(Self { arcs })
+    }
+
+    /// Returns the arc values.
+    #[must_use]
+    pub fn arcs(&self) -> &[u32] {
+        &self.arcs
+    }
+
+    /// Returns the number of arcs.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.arcs.len()
+    }
+
+    /// Check if the OID is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.arcs.is_empty()
+    }
+
+    /// Check if this OID starts with another OID.
+    ///
+    /// Returns `true` if `self` begins with the same arcs as `other`.
+    /// An OID always starts with itself, and any OID starts with an empty OID.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// let sys_descr = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+    /// let system = Oid::parse("1.3.6.1.2.1.1").unwrap();
+    /// let interfaces = Oid::parse("1.3.6.1.2.1.2").unwrap();
+    ///
+    /// // sysDescr is under the system subtree
+    /// assert!(sys_descr.starts_with(&system));
+    ///
+    /// // sysDescr is not under the interfaces subtree
+    /// assert!(!sys_descr.starts_with(&interfaces));
+    ///
+    /// // Every OID starts with itself
+    /// assert!(sys_descr.starts_with(&sys_descr));
+    ///
+    /// // Every OID starts with the empty OID
+    /// assert!(sys_descr.starts_with(&Oid::empty()));
+    /// ```
+    #[must_use]
+    pub fn starts_with(&self, other: &Oid) -> bool {
+        self.arcs.len() >= other.arcs.len() && self.arcs[..other.arcs.len()] == other.arcs[..]
+    }
+
+    /// Returns the parent OID, which contains all arcs except the last.
+    ///
+    /// Returns `None` if the OID is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// let sys_descr = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+    /// let parent = sys_descr.parent().unwrap();
+    /// assert_eq!(parent.to_string(), "1.3.6.1.2.1.1.1");
+    ///
+    /// // Can chain parent() calls
+    /// let grandparent = parent.parent().unwrap();
+    /// assert_eq!(grandparent.to_string(), "1.3.6.1.2.1.1");
+    ///
+    /// // Empty OID has no parent
+    /// assert!(Oid::empty().parent().is_none());
+    /// ```
+    #[must_use]
+    pub fn parent(&self) -> Option<Oid> {
+        if self.arcs.is_empty() {
+            None
+        } else {
+            Some(Oid {
+                arcs: SmallVec::from_slice(&self.arcs[..self.arcs.len() - 1]),
+            })
+        }
+    }
+
+    /// Create a child OID by appending an arc.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// let system = Oid::parse("1.3.6.1.2.1.1").unwrap();
+    ///
+    /// // sysDescr is system.1
+    /// let sys_descr = system.child(1);
+    /// assert_eq!(sys_descr.to_string(), "1.3.6.1.2.1.1.1");
+    ///
+    /// // sysDescr.0 is the scalar instance
+    /// let sys_descr_instance = sys_descr.child(0);
+    /// assert_eq!(sys_descr_instance.to_string(), "1.3.6.1.2.1.1.1.0");
+    /// ```
+    #[must_use]
+    pub fn child(&self, arc: u32) -> Oid {
+        let mut arcs = self.arcs.clone();
+        arcs.push(arc);
+        Oid { arcs }
+    }
+
+    /// Strip a prefix OID, returning the remaining arcs as a new Oid.
+    ///
+    /// Returns `None` if `self` doesn't start with the given prefix.
+    /// Follows `str::strip_prefix` semantics - stripping an equal OID returns an empty OID.
+    ///
+    /// This is useful for extracting table indexes from walked OIDs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::{oid, Oid};
+    ///
+    /// let if_descr_5 = oid!(1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 5);
+    /// let if_descr = oid!(1, 3, 6, 1, 2, 1, 2, 2, 1, 2);
+    ///
+    /// // Extract the index
+    /// let index = if_descr_5.strip_prefix(&if_descr).unwrap();
+    /// assert_eq!(index.arcs(), &[5]);
+    ///
+    /// // Non-matching prefix returns None
+    /// let sys_descr = oid!(1, 3, 6, 1, 2, 1, 1, 1);
+    /// assert!(if_descr_5.strip_prefix(&sys_descr).is_none());
+    ///
+    /// // Equal OIDs return empty
+    /// let same = oid!(1, 3, 6);
+    /// assert!(same.strip_prefix(&same).unwrap().is_empty());
+    ///
+    /// // Empty prefix returns self
+    /// let any = oid!(1, 2, 3);
+    /// assert_eq!(any.strip_prefix(&Oid::empty()).unwrap(), any);
+    /// ```
+    #[must_use]
+    pub fn strip_prefix(&self, prefix: &Oid) -> Option<Oid> {
+        if self.starts_with(prefix) {
+            Some(Oid::from_slice(&self.arcs[prefix.len()..]))
+        } else {
+            None
+        }
+    }
+
+    /// Returns the last `n` arcs as a slice for use as a multi-level table index.
+    ///
+    /// Returns `None` if `n` exceeds the OID length.
+    ///
+    /// This is useful for grouping SNMP table walk results by composite indexes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid;
+    ///
+    /// // ipNetToMediaPhysAddress has index (ifIndex, IpAddress) = 5 arcs
+    /// let oid = oid!(1, 3, 6, 1, 2, 1, 4, 22, 1, 2, 1, 192, 168, 1, 100);
+    ///
+    /// // Get the 5-arc index (ifIndex=1, IP=192.168.1.100)
+    /// let index = oid.suffix(5).unwrap();
+    /// assert_eq!(index, &[1, 192, 168, 1, 100]);
+    ///
+    /// // Get the last arc
+    /// assert_eq!(oid.suffix(1), Some(&[100][..]));
+    ///
+    /// // suffix(0) returns empty slice
+    /// assert_eq!(oid.suffix(0), Some(&[][..]));
+    ///
+    /// // Too large returns None
+    /// assert!(oid.suffix(100).is_none());
+    /// ```
+    #[must_use]
+    pub fn suffix(&self, n: usize) -> Option<&[u32]> {
+        if n <= self.arcs.len() {
+            Some(&self.arcs[self.arcs.len() - n..])
+        } else {
+            None
+        }
+    }
+
+    /// Validate OID arcs per X.690 Section 8.19.4.
+    ///
+    /// - arc1 must be 0, 1, or 2
+    /// - arc2 must be <= 39 when arc1 is 0 or 1
+    /// - arc2 may use the full `u32` range when arc1 is 2
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::Oid;
+    ///
+    /// // Standard SNMP OIDs are valid
+    /// let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+    /// assert!(oid.validate().is_ok());
+    ///
+    /// // arc1 must be 0, 1, or 2
+    /// let invalid = Oid::from_slice(&[3, 0]);
+    /// assert!(invalid.validate().is_err());
+    ///
+    /// // arc2 must be <= 39 when arc1 is 0 or 1
+    /// let invalid = Oid::from_slice(&[0, 40]);
+    /// assert!(invalid.validate().is_err());
+    ///
+    /// // arc2 can use the full u32 range when arc1 is 2
+    /// let valid = Oid::from_slice(&[2, u32::MAX]);
+    /// assert!(valid.validate().is_ok());
+    /// ```
+    pub fn validate(&self) -> Result<()> {
+        if self.arcs.is_empty() {
+            return Ok(());
+        }
+
+        // A single-arc OID has no invertible BER encoding: X.690 8.19.4 packs the
+        // first TWO components into one subidentifier (arc1*40 + arc2), so encoding
+        // `[n]` produces subidentifier n*40, which decodes back to `[n, 0]`. This
+        // check guards every public and structured outbound encode path.
+        // Decoding never yields a single-arc OID (it always pushes two arcs, or
+        // zero for empty).
+        if self.arcs.len() == 1 {
+            return Err(Error::InvalidOid(
+                "OID must have at least two arcs to be BER-encodable".into(),
+            )
+            .boxed());
+        }
+
+        let arc1 = self.arcs[0];
+
+        // arc1 must be 0, 1, or 2
+        if arc1 > 2 {
+            return Err(Error::InvalidOid(
+                format!("first arc must be 0, 1, or 2, got {arc1}").into(),
+            )
+            .boxed());
+        }
+
+        // Validate arc2 constraints (at least two arcs exist past this point)
+        let arc2 = self.arcs[1];
+
+        // arc2 must be <= 39 when arc1 < 2
+        if arc1 < 2 && arc2 >= 40 {
+            return Err(Error::InvalidOid(
+                format!("second arc must be <= 39 when first arc is {arc1}, got {arc2}").into(),
+            )
+            .boxed());
+        }
+
+        Ok(())
+    }
+
+    /// Validate that the OID doesn't exceed the maximum arc count.
+    ///
+    /// SNMP implementations commonly limit OIDs to 128 subidentifiers. This check
+    /// provides protection against `DoS` attacks from maliciously long OIDs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_snmp::oid::{Oid, MAX_OID_LEN};
+    ///
+    /// let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+    /// assert!(oid.validate_length().is_ok());
+    ///
+    /// // Create an OID with too many arcs
+    /// let too_long: Vec<u32> = (0..150).collect();
+    /// let long_oid = Oid::new(too_long);
+    /// assert!(long_oid.validate_length().is_err());
+    /// ```
+    pub fn validate_length(&self) -> Result<()> {
+        if self.arcs.len() > MAX_OID_LEN {
+            return Err(Error::InvalidOid(
+                format!(
+                    "OID has {} arcs, exceeds maximum {}",
+                    self.arcs.len(),
+                    MAX_OID_LEN
+                )
+                .into(),
+            )
+            .boxed());
+        }
+        Ok(())
+    }
+
+    /// Validate both arc constraints and length.
+    ///
+    /// Combines [`validate()`](Self::validate) and [`validate_length()`](Self::validate_length).
+    pub fn validate_all(&self) -> Result<()> {
+        self.validate()?;
+        self.validate_length()
+    }
+
+    /// Validate that this OID can be emitted as an SNMP OBJECT IDENTIFIER.
+    ///
+    /// Empty OIDs remain useful as receive-side compatibility values and tree
+    /// prefixes, but are not valid outbound OBJECT IDENTIFIER values.
+    pub fn validate_for_wire(&self) -> Result<()> {
+        if self.arcs.is_empty() {
+            return Err(Error::InvalidOid(
+                "cannot BER-encode an empty OID (no subidentifiers)".into(),
+            )
+            .boxed());
+        }
+        self.validate_all()
+    }
+
+    /// Encode to BER format, returning bytes in a stack-allocated buffer.
+    ///
+    /// Uses `SmallVec` to avoid heap allocation for OIDs with up to ~20 arcs.
+    /// This is the optimized version used internally by encoding routines.
+    ///
+    /// OID encoding (X.690 Section 8.19):
+    /// - First two arcs encoded as (arc1 * 40) + arc2 using base-128
+    /// - Remaining arcs encoded as base-128 variable length
+    pub(crate) fn to_ber_smallvec(&self) -> SmallVec<[u8; 64]> {
+        let mut bytes = SmallVec::new();
+
+        if self.arcs.is_empty() {
+            return bytes;
+        }
+
+        // The combined first subidentifier can exceed u32::MAX by up to 80.
+        // Later subidentifiers remain u32 values.
+        encode_first_subidentifier(&mut bytes, first_subidentifier(&self.arcs));
+
+        // Remaining arcs
+        for &arc in self.arcs.iter().skip(2) {
+            encode_subidentifier_smallvec(&mut bytes, arc);
+        }
+
+        bytes
+    }
+
+    /// Encode to BER content bytes after enforcing outbound wire validity.
+    ///
+    /// `Oid` itself remains permissive for receive-side compatibility and tree
+    /// operations. Encoding rejects empty, malformed, overlength, and
+    /// non-round-trippable values.
+    pub fn to_ber(&self) -> Result<Vec<u8>> {
+        self.validate_for_wire()?;
+        Ok(self.to_ber_smallvec().to_vec())
+    }
+
+    /// Returns the BER content size (excluding tag and length bytes).
+    pub(crate) fn ber_content_size(&self) -> usize {
+        use crate::ber::base128_len;
+
+        if self.arcs.is_empty() {
+            return 0;
+        }
+
+        let mut len = 0;
+
+        // The combined first subidentifier can exceed u32::MAX by up to 80.
+        len += base128_len_u64(first_subidentifier(&self.arcs));
+
+        // Remaining arcs
+        for &arc in self.arcs.iter().skip(2) {
+            len += base128_len(arc);
+        }
+
+        len
+    }
+
+    /// Returns the total BER-encoded size (tag + length + content).
+    pub(crate) fn ber_encoded_size(&self) -> usize {
+        use crate::ber::length_encoded_len;
+
+        let content_len = self.ber_content_size();
+        1 + length_encoded_len(content_len) + content_len
+    }
+
+    /// Decode from BER format.
+    ///
+    /// Enforces [`MAX_OID_LEN`] limit per RFC 2578 Section 3.5.
+    pub fn from_ber(data: &[u8]) -> Result<Self> {
+        if data.is_empty() {
+            return Ok(Self::empty());
+        }
+
+        let mut arcs = SmallVec::new();
+
+        // Decode the combined first subidentifier with its wider valid range.
+        let (first_subid, consumed) = decode_first_subidentifier(data)?;
+
+        // Split the combined value back into u32 arcs.
+        let (arc1, arc2) = if first_subid < 40 {
+            (0, first_subid)
+        } else if first_subid < 80 {
+            (1, first_subid - 40)
+        } else {
+            (2, first_subid - 80)
+        };
+        let arc2 = u32::try_from(arc2).map_err(|_| {
+            Error::Decode(DecodeError::new(consumed, DecodeErrorKind::IntegerOverflow)).boxed()
+        })?;
+        arcs.push(arc1);
+        arcs.push(arc2);
+
+        // Decode remaining arcs
+        let mut i = consumed;
+        while i < data.len() {
+            let (arc, bytes_consumed) =
+                decode_subidentifier(&data[i..]).map_err(|error| match *error {
+                    Error::Decode(mut error) => {
+                        error.offset = i.saturating_add(error.offset);
+                        Error::Decode(error).boxed()
+                    }
+                    other => Box::new(other),
+                })?;
+            arcs.push(arc);
+            i += bytes_consumed;
+
+            // RFC 2578 Section 3.5: "at most 128 sub-identifiers in a value"
+            if arcs.len() > MAX_OID_LEN {
+                tracing::debug!(target: "async_snmp::oid", { snmp.offset = %i, kind = %DecodeErrorKind::OidTooLong { count: arcs.len(), max: MAX_OID_LEN } }, "OID exceeds maximum arc count");
+                return Err(Error::Decode(DecodeError::new(
+                    i,
+                    DecodeErrorKind::OidTooLong {
+                        count: arcs.len(),
+                        max: MAX_OID_LEN,
+                    },
+                ))
+                .boxed());
+            }
+        }
+
+        Ok(Self { arcs })
+    }
+}
+
+/// Compute the first OID subidentifier value from an arc slice.
+///
+/// Per X.690 Section 8.19: the first two arcs are encoded as `arc1 * 40 + arc2`.
+/// The combined value needs a `u64` because the valid `2.4294967295` boundary
+/// encodes as 4294967375. Individual arcs remain `u32`.
+#[inline]
+fn first_subidentifier(arcs: &SmallVec<[u32; 16]>) -> u64 {
+    if arcs.len() >= 2 {
+        u64::from(arcs[0]) * 40 + u64::from(arcs[1])
+    } else {
+        u64::from(arcs[0]) * 40
+    }
+}
+
+/// Return the base-128 length of the combined first subidentifier.
+#[inline]
+fn base128_len_u64(mut value: u64) -> usize {
+    let mut len = 1;
+    while value >= 0x80 {
+        len += 1;
+        value >>= 7;
+    }
+    len
+}
+
+/// Encode the combined first subidentifier in base-128 variable length.
+#[inline]
+fn encode_first_subidentifier(bytes: &mut SmallVec<[u8; 64]>, value: u64) {
+    if value == 0 {
+        bytes.push(0);
+        return;
+    }
+
+    let mut temp = value;
+    let mut count = 0;
+    while temp > 0 {
+        count += 1;
+        temp >>= 7;
+    }
+
+    for i in (0..count).rev() {
+        let mut byte = ((value >> (i * 7)) & 0x7F) as u8;
+        if i > 0 {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+    }
+}
+
+/// Encode a later u32 subidentifier in base-128 variable length.
+#[inline]
+fn encode_subidentifier_smallvec(bytes: &mut SmallVec<[u8; 64]>, value: u32) {
+    if value == 0 {
+        bytes.push(0);
+        return;
+    }
+
+    let mut temp = value;
+    let mut count = 0;
+    while temp > 0 {
+        count += 1;
+        temp >>= 7;
+    }
+
+    for i in (0..count).rev() {
+        let mut byte = ((value >> (i * 7)) & 0x7F) as u8;
+        if i > 0 {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+    }
+}
+
+/// Decode the combined first subidentifier, returning (value, `bytes_consumed`).
+fn decode_first_subidentifier(data: &[u8]) -> Result<(u64, usize)> {
+    const MAX_FIRST_SUBIDENTIFIER: u64 = u32::MAX as u64 + 80;
+
+    let mut value = 0u64;
+    let mut i = 0;
+
+    loop {
+        if i >= data.len() {
+            tracing::debug!(target: "async_snmp::oid", { snmp.offset = %i, kind = %DecodeErrorKind::TruncatedData }, "unexpected end of data in OID subidentifier");
+            return Err(Error::Decode(DecodeError::new(i, DecodeErrorKind::TruncatedData)).boxed());
+        }
+
+        let byte = data[i];
+        i += 1;
+        let payload = u64::from(byte & 0x7F);
+
+        if value > (MAX_FIRST_SUBIDENTIFIER - payload) >> 7 {
+            tracing::debug!(target: "async_snmp::oid", { snmp.offset = %i, kind = %DecodeErrorKind::IntegerOverflow }, "combined first OID subidentifier overflow");
+            return Err(
+                Error::Decode(DecodeError::new(i, DecodeErrorKind::IntegerOverflow)).boxed(),
+            );
+        }
+
+        value = (value << 7) | payload;
+        if byte & 0x80 == 0 {
+            return Ok((value, i));
+        }
+    }
+}
+
+/// Decode a later u32 subidentifier, returning (value, `bytes_consumed`).
+fn decode_subidentifier(data: &[u8]) -> Result<(u32, usize)> {
+    let mut value: u32 = 0;
+    let mut i = 0;
+
+    loop {
+        if i >= data.len() {
+            tracing::debug!(target: "async_snmp::oid", { snmp.offset = %i, kind = %DecodeErrorKind::TruncatedData }, "unexpected end of data in OID subidentifier");
+            return Err(Error::Decode(DecodeError::new(i, DecodeErrorKind::TruncatedData)).boxed());
+        }
+
+        let byte = data[i];
+        i += 1;
+
+        // Check for overflow before shifting
+        if value > (u32::MAX >> 7) {
+            tracing::debug!(target: "async_snmp::oid", { snmp.offset = %i, kind = %DecodeErrorKind::IntegerOverflow }, "OID subidentifier overflow");
+            return Err(
+                Error::Decode(DecodeError::new(i, DecodeErrorKind::IntegerOverflow)).boxed(),
+            );
+        }
+
+        value = (value << 7) | u32::from(byte & 0x7F);
+
+        if byte & 0x80 == 0 {
+            // Last byte
+            break;
+        }
+    }
+
+    Ok((value, i))
+}
+
+impl fmt::Debug for Oid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Oid({self})")
+    }
+}
+
+impl fmt::Display for Oid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for arc in &self.arcs {
+            if !first {
+                write!(f, ".")?;
+            }
+            write!(f, "{arc}")?;
+            first = false;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for Oid {
+    type Err = Box<crate::error::Error>;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl From<&[u32]> for Oid {
+    fn from(arcs: &[u32]) -> Self {
+        Self::from_slice(arcs)
+    }
+}
+
+impl<const N: usize> From<[u32; N]> for Oid {
+    fn from(arcs: [u32; N]) -> Self {
+        Self::new(arcs)
+    }
+}
+
+impl From<Vec<u32>> for Oid {
+    fn from(arcs: Vec<u32>) -> Self {
+        Self {
+            arcs: SmallVec::from_vec(arcs),
+        }
+    }
+}
+
+impl AsRef<[u32]> for Oid {
+    fn as_ref(&self) -> &[u32] {
+        self.arcs()
+    }
+}
+
+impl<'a> IntoIterator for &'a Oid {
+    type Item = &'a u32;
+    type IntoIter = std::slice::Iter<'a, u32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.arcs().iter()
+    }
+}
+
+impl IntoIterator for Oid {
+    type Item = u32;
+    type IntoIter = smallvec::IntoIter<[u32; 16]>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.arcs.into_iter()
+    }
+}
+
+impl PartialOrd for Oid {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Oid {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.arcs.cmp(&other.arcs)
+    }
+}
+
+/// Macro to create an OID from inline arc expressions.
+///
+/// This is a concise way to construct an OID without dotted-string parsing.
+/// `Oid` owns a `SmallVec`, so the expansion is not a Rust `const` expression.
+///
+/// # Examples
+///
+/// ```
+/// use async_snmp::oid;
+///
+/// // Create an OID for sysDescr.0
+/// let sys_descr = oid!(1, 3, 6, 1, 2, 1, 1, 1, 0);
+/// assert_eq!(sys_descr.to_string(), "1.3.6.1.2.1.1.1.0");
+///
+/// // Trailing commas are allowed
+/// let sys_name = oid!(1, 3, 6, 1, 2, 1, 1, 5, 0,);
+///
+/// // Arc expressions are evaluated at runtime.
+/// let interfaces = oid!(1, 3, 6, 1, 2, 1, 2);
+/// assert!(sys_descr.starts_with(&oid!(1, 3, 6, 1, 2, 1, 1)));
+/// ```
+#[macro_export]
+macro_rules! oid {
+    ($($arc:expr),* $(,)?) => {
+        $crate::oid::Oid::from_slice(&[$($arc),*])
+    };
+}
+
+// ========================================================================
+// mib-rs OID conversions (feature = "mib")
+// ========================================================================
+
+#[cfg(feature = "mib")]
+impl From<&mib_rs::Oid> for Oid {
+    fn from(oid: &mib_rs::Oid) -> Self {
+        Oid::from_slice(oid.as_ref())
+    }
+}
+
+#[cfg(feature = "mib")]
+impl From<mib_rs::Oid> for Oid {
+    fn from(oid: mib_rs::Oid) -> Self {
+        Oid::from_slice(oid.as_ref())
+    }
+}
+
+#[cfg(feature = "mib")]
+impl Oid {
+    /// Convert to a mib-rs OID.
+    ///
+    /// This is a method rather than a `From` impl because the orphan rule
+    /// prevents implementing `From<&Oid> for mib_rs::Oid` (foreign trait
+    /// for foreign type).
+    pub fn to_mib_oid(&self) -> mib_rs::Oid {
+        mib_rs::Oid::from(self.arcs())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse() {
+        let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 6, 1, 2, 1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn test_parse_leading_dot() {
+        let oid = Oid::parse(".1.3.6").unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 6]);
+
+        let oid = Oid::parse(".1.3.6.1.2.1").unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 6, 1, 2, 1]);
+
+        // Leading dot on single arc
+        let oid = Oid::parse(".0").unwrap();
+        assert_eq!(oid.arcs(), &[0]);
+
+        // Just a dot yields empty OID
+        let oid = Oid::parse(".").unwrap();
+        assert!(oid.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rejects_empty_components() {
+        assert!(Oid::parse("1.3.6.").is_err()); // Trailing dot
+        assert!(Oid::parse("1..3.6").is_err()); // Double dot
+        assert!(Oid::parse("..1.3").is_err()); // Double leading dot
+        assert!(Oid::parse("...").is_err()); // All dots
+    }
+
+    #[test]
+    fn test_display() {
+        let oid = Oid::from_slice(&[1, 3, 6, 1, 2, 1, 1, 1, 0]);
+        assert_eq!(oid.to_string(), "1.3.6.1.2.1.1.1.0");
+    }
+
+    #[test]
+    fn test_starts_with() {
+        let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+        let prefix = Oid::parse("1.3.6.1").unwrap();
+        assert!(oid.starts_with(&prefix));
+        assert!(!prefix.starts_with(&oid));
+    }
+
+    #[test]
+    fn test_ber_roundtrip() {
+        let oid = Oid::parse("1.3.6.1.2.1.1.1.0").unwrap();
+        let ber = oid.to_ber().unwrap();
+        let decoded = Oid::from_ber(&ber).unwrap();
+        assert_eq!(oid, decoded);
+    }
+
+    #[test]
+    fn test_ber_encoding() {
+        // 1.3.6.1 encodes as: (1*40+3)=43, 6, 1 = [0x2B, 0x06, 0x01]
+        let oid = Oid::parse("1.3.6.1").unwrap();
+        assert_eq!(oid.to_ber().unwrap(), vec![0x2B, 0x06, 0x01]);
+    }
+
+    #[test]
+    fn test_macro() {
+        let oid = oid!(1, 3, 6, 1);
+        assert_eq!(oid.arcs(), &[1, 3, 6, 1]);
+    }
+
+    #[test]
+    fn from_vec_u32() {
+        let v = vec![1, 3, 6, 1, 2, 1];
+        let oid = Oid::from(v);
+        assert_eq!(oid.arcs(), &[1, 3, 6, 1, 2, 1]);
+    }
+
+    #[test]
+    fn oid_as_ref() {
+        let oid = Oid::new([1, 3, 6, 1]);
+        let slice: &[u32] = oid.as_ref();
+        assert_eq!(slice, &[1, 3, 6, 1]);
+    }
+
+    // AUDIT-001: Test arc validation
+    // X.690 Section 8.19.4: arc1 must be 0, 1, or 2; arc2 must be <= 39 when arc1 < 2
+    #[test]
+    fn test_validate_arc1_must_be_0_1_or_2() {
+        // arc1 = 3 is invalid
+        let oid = Oid::from_slice(&[3, 0]);
+        let result = oid.validate();
+        assert!(result.is_err(), "arc1=3 should be invalid");
+    }
+
+    #[test]
+    fn test_validate_arc2_limit_when_arc1_is_0() {
+        // arc1 = 0, arc2 = 40 is invalid (max is 39)
+        let oid = Oid::from_slice(&[0, 40]);
+        let result = oid.validate();
+        assert!(result.is_err(), "arc2=40 with arc1=0 should be invalid");
+
+        // arc1 = 0, arc2 = 39 is valid
+        let oid = Oid::from_slice(&[0, 39]);
+        assert!(
+            oid.validate().is_ok(),
+            "arc2=39 with arc1=0 should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_arc2_limit_when_arc1_is_1() {
+        // arc1 = 1, arc2 = 40 is invalid
+        let oid = Oid::from_slice(&[1, 40]);
+        let result = oid.validate();
+        assert!(result.is_err(), "arc2=40 with arc1=1 should be invalid");
+
+        // arc1 = 1, arc2 = 39 is valid
+        let oid = Oid::from_slice(&[1, 39]);
+        assert!(
+            oid.validate().is_ok(),
+            "arc2=39 with arc1=1 should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_arc2_no_limit_when_arc1_is_2() {
+        // arc1 = 2, arc2 can be anything (e.g., 999)
+        let oid = Oid::from_slice(&[2, 999]);
+        assert!(
+            oid.validate().is_ok(),
+            "arc2=999 with arc1=2 should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_single_arc() {
+        // A single-arc OID has no invertible BER encoding (encode [1] -> subid 40,
+        // decode -> [1, 0]); validate() and to_ber() must reject it.
+        let oid = Oid::from_slice(&[1]);
+        assert!(oid.validate().is_err(), "single-arc OID must be rejected");
+        assert!(oid.to_ber().is_err(), "to_ber must reject single-arc OID");
+        // parse still accepts it (only validate() is stricter)
+        assert_eq!(Oid::parse("1").unwrap().arcs(), &[1]);
+    }
+
+    #[test]
+    fn test_to_ber_rejects_non_wire_safe_oids() {
+        // Empty OID: no subidentifiers, not a valid OBJECT IDENTIFIER value
+        // (X.690 Section 8.19.4). The strict encode entry point must reject it
+        // even though empty OIDs are usable as a prefix concept elsewhere.
+        assert!(
+            Oid::empty().to_ber().is_err(),
+            "to_ber must reject empty OID"
+        );
+
+        // Single-arc OID: no invertible BER encoding ([n] -> subid n*40 -> [n, 0]).
+        assert!(
+            Oid::from_slice(&[1]).to_ber().is_err(),
+            "to_ber must reject single-arc OID"
+        );
+
+        // Over-MAX_OID_LEN OID: RFC 2578 Section 3.5 caps values at MAX_OID_LEN
+        // subidentifiers. validate() alone does not catch this; validate_length() does.
+        let mut arcs = vec![1u32, 3];
+        arcs.extend(2..(MAX_OID_LEN as u32));
+        // arcs now has MAX_OID_LEN elements and is accepted.
+        let at_limit = Oid::new(arcs.clone());
+        assert_eq!(at_limit.arcs().len(), MAX_OID_LEN);
+        assert!(
+            at_limit.to_ber().is_ok(),
+            "to_ber should accept OID at MAX_OID_LEN"
+        );
+        arcs.push(0);
+        let over_limit = Oid::new(arcs);
+        assert_eq!(over_limit.arcs().len(), MAX_OID_LEN + 1);
+        assert!(
+            over_limit.to_ber().is_err(),
+            "to_ber must reject OID exceeding MAX_OID_LEN"
+        );
+    }
+
+    #[test]
+    fn test_to_ber_validates_arcs() {
+        // Invalid OID should return error from to_ber
+        let oid = Oid::from_slice(&[3, 0]); // arc1=3 is invalid
+        let result = oid.to_ber();
+        assert!(result.is_err(), "to_ber should fail for invalid arc1");
+    }
+
+    // AUDIT-002: Test first subidentifier encoding for large arc2 values
+    // X.690 Section 8.19 example: OID {2 999 3} has first subidentifier = 1079
+    #[test]
+    fn test_ber_encoding_large_arc2() {
+        // OID 2.999.3: first subid = 2*40 + 999 = 1079 = 0x437
+        // 1079 in base-128: 0x88 0x37 (continuation bit set on first byte)
+        let oid = Oid::from_slice(&[2, 999, 3]);
+        let ber = oid.to_ber().unwrap();
+        // First subidentifier 1079 = 0b10000110111 = 7 bits: 0b0110111 (0x37), 7 bits: 0b0001000 (0x08)
+        // In base-128: (1079 >> 7) = 8, (1079 & 0x7F) = 55
+        // So: 0x88 (8 | 0x80), 0x37 (55)
+        assert_eq!(
+            ber[0], 0x88,
+            "first byte should be 0x88 (8 with continuation)"
+        );
+        assert_eq!(
+            ber[1], 0x37,
+            "second byte should be 0x37 (55, no continuation)"
+        );
+        assert_eq!(ber[2], 0x03, "third byte should be 0x03 (arc 3)");
+        assert_eq!(ber.len(), 3, "OID 2.999.3 should encode to 3 bytes");
+    }
+
+    #[test]
+    fn test_ber_roundtrip_large_arc2() {
+        // Ensure roundtrip works for OID with large arc2
+        let oid = Oid::from_slice(&[2, 999, 3]);
+        let ber = oid.to_ber().unwrap();
+        let decoded = Oid::from_ber(&ber).unwrap();
+        assert_eq!(oid, decoded, "roundtrip should preserve OID 2.999.3");
+    }
+
+    #[test]
+    fn test_ber_encoding_arc2_equals_80() {
+        // Edge case: arc1=2, arc2=0 gives first subid = 80, which is exactly 1 byte
+        let oid = Oid::from_slice(&[2, 0]);
+        let ber = oid.to_ber().unwrap();
+        assert_eq!(ber, vec![80], "OID 2.0 should encode to [80]");
+    }
+
+    #[test]
+    fn test_ber_encoding_arc2_equals_127() {
+        // arc1=2, arc2=47 gives first subid = 127, still fits in 1 byte
+        let oid = Oid::from_slice(&[2, 47]);
+        let ber = oid.to_ber().unwrap();
+        assert_eq!(ber, vec![127], "OID 2.47 should encode to [127]");
+    }
+
+    #[test]
+    fn test_ber_encoding_arc2_equals_128_needs_2_bytes() {
+        // arc1=2, arc2=48 gives first subid = 128, needs 2 bytes in base-128
+        let oid = Oid::from_slice(&[2, 48]);
+        let ber = oid.to_ber().unwrap();
+        // 128 = 0x80 = base-128: 0x81 0x00
+        assert_eq!(
+            ber,
+            vec![0x81, 0x00],
+            "OID 2.48 should encode to [0x81, 0x00]"
+        );
+    }
+
+    #[test]
+    fn test_from_ber_zero_length() {
+        // A zero-length OID content (BER encoding 06 00) is accepted and returns
+        // an empty OID. This matches net-snmp's behavior in snmplib/asn1.c which
+        // treats the same encoding as 0.0 rather than rejecting it. Our empty OID
+        // differs from net-snmp's 0.0 - net-snmp encodes empty OIDs as [0x00]
+        // (a single zero byte yielding 0.0), while we produce truly zero arcs.
+        // Devices send this when returning endOfMibView with a malformed zero-length
+        // OID instead of echoing back the requested OID (RFC 3416 violation).
+        let result = Oid::from_ber(&[]);
+        assert!(result.is_ok(), "zero-length OID content should be accepted");
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_oid_non_minimal_subidentifier() {
+        // Non-minimal subidentifier encoding with leading 0x80 bytes should be accepted
+        // 0x80 0x01 should decode as 1 (non-minimal: minimal would be just 0x01)
+        // OID: 1.3 followed by arc 1 encoded as 0x80 0x01
+        let result = Oid::from_ber(&[0x2B, 0x80, 0x01]);
+        assert!(
+            result.is_ok(),
+            "should accept non-minimal subidentifier 0x80 0x01"
+        );
+        let oid = result.unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 1]);
+
+        // 0x80 0x80 0x01 should decode as 1 (two leading 0x80 bytes)
+        let result = Oid::from_ber(&[0x2B, 0x80, 0x80, 0x01]);
+        assert!(
+            result.is_ok(),
+            "should accept non-minimal subidentifier 0x80 0x80 0x01"
+        );
+        let oid = result.unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 1]);
+
+        // 0x80 0x00 should decode as 0 (non-minimal zero)
+        let result = Oid::from_ber(&[0x2B, 0x80, 0x00]);
+        assert!(
+            result.is_ok(),
+            "should accept non-minimal subidentifier 0x80 0x00"
+        );
+        let oid = result.unwrap();
+        assert_eq!(oid.arcs(), &[1, 3, 0]);
+    }
+
+    // Tests for MAX_OID_LEN validation
+    #[test]
+    fn test_validate_length_within_limit() {
+        // OID with MAX_OID_LEN arcs should be valid
+        let arcs: Vec<u32> = (0..MAX_OID_LEN as u32).collect();
+        let oid = Oid::new(arcs);
+        assert!(
+            oid.validate_length().is_ok(),
+            "OID with exactly MAX_OID_LEN arcs should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_length_exceeds_limit() {
+        // OID with more than MAX_OID_LEN arcs should fail
+        let arcs: Vec<u32> = (0..(MAX_OID_LEN + 1) as u32).collect();
+        let oid = Oid::new(arcs);
+        let result = oid.validate_length();
+        assert!(
+            result.is_err(),
+            "OID exceeding MAX_OID_LEN should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_all_combines_checks() {
+        // Valid OID
+        let oid = Oid::from_slice(&[1, 3, 6, 1]);
+        assert!(oid.validate_all().is_ok());
+
+        // Invalid arc1 (fails validate)
+        let oid = Oid::from_slice(&[3, 0]);
+        assert!(oid.validate_all().is_err());
+
+        // Too many arcs (fails validate_length)
+        let arcs: Vec<u32> = (0..(MAX_OID_LEN + 1) as u32).collect();
+        let oid = Oid::new(arcs);
+        assert!(oid.validate_all().is_err());
+    }
+
+    #[test]
+    fn test_oid_fromstr() {
+        // Test basic parsing via FromStr trait
+        let oid: Oid = "1.3.6.1.2.1.1.1.0".parse().unwrap();
+        assert_eq!(oid, oid!(1, 3, 6, 1, 2, 1, 1, 1, 0));
+
+        // Test empty OID
+        let empty: Oid = "".parse().unwrap();
+        assert!(empty.is_empty());
+
+        // Test single arc
+        let single: Oid = "1".parse().unwrap();
+        assert_eq!(single.arcs(), &[1]);
+
+        // Test roundtrip Display -> FromStr
+        let original = oid!(1, 3, 6, 1, 4, 1, 9, 9, 42);
+        let displayed = original.to_string();
+        let parsed: Oid = displayed.parse().unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn test_oid_fromstr_invalid() {
+        // Invalid arc value
+        assert!("1.3.abc.1".parse::<Oid>().is_err());
+
+        // Negative number (parsed as invalid)
+        assert!("1.3.-6.1".parse::<Oid>().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_full_root_two_arc_range() {
+        for arc2 in [u32::MAX - 80, u32::MAX - 79, u32::MAX] {
+            let oid = Oid::from_slice(&[2, arc2]);
+            assert!(oid.validate().is_ok(), "arc2={arc2} should be valid");
+            assert!(!oid.to_ber().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_from_ber_enforces_max_oid_len() {
+        // Create BER data for an OID with more than MAX_OID_LEN arcs
+        // OID encoding: first subid encodes arc1*40+arc2, then each subsequent arc
+        // First subid gives us 2 arcs (e.g., 1 and 3), so we need MAX_OID_LEN - 2
+        // additional arcs to hit exactly MAX_OID_LEN.
+
+        // Build OID at exactly MAX_OID_LEN: 1.3 followed by (MAX_OID_LEN - 2) arcs of value 1
+        let mut ber_at_limit = vec![0x2B]; // First subid = 1*40 + 3 = 43 (encodes arc1=1, arc2=3)
+        ber_at_limit.extend(std::iter::repeat_n(0x01, MAX_OID_LEN - 2));
+
+        let result = Oid::from_ber(&ber_at_limit);
+        assert!(
+            result.is_ok(),
+            "OID with exactly MAX_OID_LEN arcs should decode successfully"
+        );
+        assert_eq!(result.unwrap().len(), MAX_OID_LEN);
+
+        // Now one more arc should exceed the limit
+        let mut ber_over_limit = vec![0x2B]; // arc1=1, arc2=3
+        ber_over_limit.extend(std::iter::repeat_n(0x01, MAX_OID_LEN - 1));
+
+        let result = Oid::from_ber(&ber_over_limit);
+        assert!(
+            result.is_err(),
+            "OID exceeding MAX_OID_LEN should fail to decode"
+        );
+    }
+
+    // ========================================================================
+    // Suffix Extraction Tests
+    // ========================================================================
+
+    #[test]
+    fn test_strip_prefix() {
+        let if_descr_5 = oid!(1, 3, 6, 1, 2, 1, 2, 2, 1, 2, 5);
+        let if_descr = oid!(1, 3, 6, 1, 2, 1, 2, 2, 1, 2);
+
+        // Extract the index
+        let index = if_descr_5.strip_prefix(&if_descr).unwrap();
+        assert_eq!(index.arcs(), &[5]);
+
+        // Non-matching prefix returns None
+        let sys_descr = oid!(1, 3, 6, 1, 2, 1, 1, 1);
+        assert!(if_descr_5.strip_prefix(&sys_descr).is_none());
+
+        // Equal OIDs return empty
+        let same = oid!(1, 3, 6);
+        assert!(same.strip_prefix(&same).unwrap().is_empty());
+
+        // Empty prefix returns self
+        let any = oid!(1, 2, 3);
+        assert_eq!(any.strip_prefix(&Oid::empty()).unwrap(), any);
+
+        // Multi-arc index
+        let composite = oid!(1, 3, 6, 1, 2, 1, 4, 22, 1, 2, 1, 192, 168, 1, 100);
+        let column = oid!(1, 3, 6, 1, 2, 1, 4, 22, 1, 2);
+        let idx = composite.strip_prefix(&column).unwrap();
+        assert_eq!(idx.arcs(), &[1, 192, 168, 1, 100]);
+    }
+
+    #[test]
+    fn test_suffix() {
+        let oid = oid!(1, 3, 6, 1, 2, 1, 4, 22, 1, 2, 1, 192, 168, 1, 100);
+
+        // Get the 5-arc index
+        assert_eq!(oid.suffix(5), Some(&[1, 192, 168, 1, 100][..]));
+
+        // Get just the last arc
+        assert_eq!(oid.suffix(1), Some(&[100][..]));
+
+        // suffix(0) returns empty slice
+        assert_eq!(oid.suffix(0), Some(&[][..]));
+
+        // Exact length returns full OID
+        assert_eq!(oid.suffix(15), Some(oid.arcs()));
+
+        // Too large returns None
+        assert!(oid.suffix(16).is_none());
+        assert!(oid.suffix(100).is_none());
+
+        // Empty OID
+        let empty = Oid::empty();
+        assert_eq!(empty.suffix(0), Some(&[][..]));
+        assert!(empty.suffix(1).is_none());
+    }
+
+    #[test]
+    fn oid_into_iter_ref() {
+        let oid = Oid::new([1, 3, 6]);
+        let arcs: Vec<&u32> = (&oid).into_iter().collect();
+        assert_eq!(arcs, vec![&1, &3, &6]);
+    }
+
+    #[test]
+    fn oid_into_iter_owned() {
+        let oid = Oid::new([1, 3, 6]);
+        let arcs: Vec<u32> = oid.into_iter().collect();
+        assert_eq!(arcs, vec![1, 3, 6]);
+    }
+
+    #[test]
+    fn oid_for_loop() {
+        let oid = Oid::new([1, 3, 6]);
+        let mut sum = 0u32;
+        for arc in &oid {
+            sum += arc;
+        }
+        assert_eq!(sum, 10);
+    }
+
+    #[test]
+    fn to_ber_unchanged_for_valid_oid() {
+        // Control: a valid OID's encoding is unaffected by the saturating change.
+        let oid = Oid::parse("1.3.6.1.2.1").unwrap();
+        assert!(oid.validate().is_ok());
+        assert_eq!(oid.to_ber().unwrap(), vec![0x2b, 0x06, 0x01, 0x02, 0x01]);
+    }
+}

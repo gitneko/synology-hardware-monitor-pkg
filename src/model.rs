@@ -22,10 +22,19 @@ pub struct Observation {
 pub struct Capability {
     pub uri: String,
     pub outcome: String,
+    /// Unsupported optional groups do not widen the profile's assessment scope.
+    /// Transport/decoding failures still block assessment, even for such groups.
+    #[serde(default)]
+    pub optional: bool,
     #[serde(default)]
     pub http_status: Option<u16>,
     #[serde(default = "one_attempt")]
     pub attempts: u8,
+}
+impl Capability {
+    pub fn blocks_assessment(&self) -> bool {
+        self.outcome != "available" && !(self.optional && self.outcome == "unsupported")
+    }
 }
 fn one_attempt() -> u8 {
     1
@@ -33,14 +42,39 @@ fn one_attempt() -> u8 {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HardwareLog {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<LogIdentity>,
     pub fingerprint: String,
     pub message: String,
     pub severity: Health,
     pub created: Option<String>,
 }
 
+/// An occurrence must identify one record in a known component/generation.
+/// A MessageId alone is an event type and cannot authorize deduplication.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Occurrence {
+    pub vendor: String,
+    pub record_id: String,
+    pub component: String,
+    pub generation: String,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LogIdentity {
+    pub record_id: Option<String>,
+    pub message_id: Option<String>,
+    pub component: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<Occurrence>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub component_identities: Vec<crate::identity::Component>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp: Option<crate::snmp::polling::Metadata>,
     #[serde(default)]
     pub assessment_exclusions: std::collections::BTreeMap<String, AssessmentExclusion>,
     #[serde(default)]
@@ -72,12 +106,29 @@ pub enum TlsProfile {
     Idrac7,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimaryProtocol {
+    #[default]
+    Redfish,
+    Snmp,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Device {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
+    pub primary_protocol: PrimaryProtocol,
+    #[serde(default)]
+    pub snmp_poll: Option<crate::snmp::config::PollConfig>,
+    #[serde(default)]
+    pub snmp_traps: Option<crate::snmp::config::TrapConfig>,
     pub interval_seconds: u64,
     pub repeat_seconds: Option<i64>,
     pub alerts_enabled: bool,
@@ -110,7 +161,23 @@ fn enabled_default() -> bool {
 }
 
 impl Device {
+    pub fn primary_target_changed(&self, other: &Self) -> bool {
+        if self.primary_protocol != other.primary_protocol {
+            return true;
+        }
+        match self.primary_protocol {
+            PrimaryProtocol::Redfish => self.endpoint != other.endpoint,
+            PrimaryProtocol::Snmp => match (&self.snmp_poll, &other.snmp_poll) {
+                (Some(a), Some(b)) => !a.same_target(b),
+                _ => true,
+            },
+        }
+    }
+
     pub fn poll_timeout_seconds(&self) -> u64 {
+        if self.primary_protocol == PrimaryProtocol::Snmp {
+            return 60;
+        }
         match self.tls_profile {
             TlsProfile::Idrac7 => 300,
             TlsProfile::Standard => 90,
@@ -119,7 +186,9 @@ impl Device {
 
     pub fn stale_after_seconds(&self) -> u64 {
         self.interval_seconds * 2
-            + if self.tls_profile == TlsProfile::Idrac7 {
+            + if self.tls_profile == TlsProfile::Idrac7
+                || self.primary_protocol == PrimaryProtocol::Snmp
+            {
                 self.poll_timeout_seconds()
             } else {
                 0
@@ -148,6 +217,36 @@ impl Device {
                 && !self.name.chars().any(char::is_control),
             "invalid device name"
         );
+        anyhow::ensure!(
+            (30..=86400).contains(&self.interval_seconds),
+            "poll interval must be 30..86400 seconds"
+        );
+        anyhow::ensure!(
+            self.repeat_seconds.is_none_or(|n| n >= 300),
+            "repeat interval must be at least 300 seconds"
+        );
+        if let Some(config) = &self.snmp_poll {
+            config.validate()?;
+        }
+        if let Some(config) = &self.snmp_traps {
+            config.validate()?;
+        }
+        if self.primary_protocol == PrimaryProtocol::Snmp {
+            anyhow::ensure!(
+                self.snmp_poll.is_some(),
+                "SNMP primary requires polling configuration"
+            );
+            anyhow::ensure!(
+                self.endpoint.is_empty()
+                    && self.username.is_empty()
+                    && self.ca_file.is_none()
+                    && self.ca_pem.is_none()
+                    && self.pinned_certificate_pem.is_none()
+                    && self.tls_profile == TlsProfile::Standard,
+                "SNMP primary must not contain Redfish settings"
+            );
+            return Ok(());
+        }
         let u = url::Url::parse(&self.endpoint)?;
         anyhow::ensure!(
             u.scheme() == "https"
@@ -227,4 +326,37 @@ pub fn validate_certificates(pem: &str) -> anyhow::Result<()> {
     }
     anyhow::ensure!(count > 0, "certificate missing");
     Ok(())
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    #[test]
+    fn optional_absence_is_neutral_but_failures_and_legacy_groups_still_block() {
+        for outcome in [
+            "available",
+            "unsupported",
+            "snmp_timeout",
+            "snmp_invalid_response",
+            "snmp_item_limit",
+        ] {
+            for optional in [false, true] {
+                let c = Capability {
+                    uri: "snmp:test".into(),
+                    outcome: outcome.into(),
+                    optional,
+                    http_status: None,
+                    attempts: 1,
+                };
+                assert_eq!(
+                    c.blocks_assessment(),
+                    outcome != "available" && !(optional && outcome == "unsupported")
+                );
+            }
+        }
+        let legacy: Capability =
+            serde_json::from_str(r#"{"uri":"old","outcome":"unsupported"}"#).unwrap();
+        assert!(!legacy.optional);
+        assert!(legacy.blocks_assessment());
+    }
 }

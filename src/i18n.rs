@@ -45,6 +45,25 @@ pub fn label(value: &str, language: Language) -> String {
     if language == Language::De {
         return value.into();
     }
+    if value.starts_with("USV · ") {
+        return value
+            .split(" · ")
+            .map(|part| text(part, language))
+            .collect::<Vec<_>>()
+            .join(" · ");
+    }
+    if value.starts_with("DSM · ") {
+        return text(value, language);
+    }
+    if value.starts_with("SNMP · ") {
+        let translated = text(value, language);
+        if translated != value {
+            return translated;
+        }
+        if let Some((prefix, suffix)) = value.rsplit_once(" · ") {
+            return format!("{prefix} · {}", text(suffix, language));
+        }
+    }
     if value == "Management-Abfrage erfolgreich" {
         return "Management query successful".into();
     }
@@ -113,7 +132,16 @@ pub fn event_message(
     };
     let raw = context["label"].as_str().unwrap_or("");
     // Hardware logs and component names are vendor data, never machine translated.
-    let detail = if kind == "hardware_log" {
+    let detail = if kind == "snmp_trap" {
+        format!(
+            "{}: {raw}",
+            if language == Language::En {
+                "SNMP event"
+            } else {
+                "SNMP-Ereignis"
+            }
+        )
+    } else if kind == "hardware_log" {
         raw.into()
     } else if context["retained"] == true {
         let health = if language == Language::En {
@@ -196,8 +224,17 @@ pub fn event_message(
             label(raw, language)
         )
     };
+    let suffix = if context["source"] == "snmp_trap" && context["provisional"] == true {
+        if language == Language::En {
+            " · SNMP trap, confirmation pending"
+        } else {
+            " · SNMP-Trap, Bestätigung ausstehend"
+        }
+    } else {
+        ""
+    };
     format!(
-        "{device}: {}",
+        "{device}: {}{suffix}",
         detail.chars().take(1600).collect::<String>()
     )
 }

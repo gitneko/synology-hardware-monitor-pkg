@@ -63,3 +63,36 @@ test('retained component fault stays visible while linked summary states remain 
  const d={alarms:[{key:'ps1',label:'PS1',health:'critical',current_health:'unknown',covered_by:[]},{key:'system',label:'System',health:'critical',covered_by:['ps1']}]};
  assert.deepEqual(primaryAlarms(d).map(a=>a.key),['ps1']);assert.deepEqual(summaryAlarms(d).map(a=>a.key),['system']);assert.equal(coveredLabels(d.alarms[1],d),'PS1');assert.match(alarmConfirmation(d.alarms[0]),/aktuell nicht bewertbar/);assert.equal(alarmConfirmation({current_health:'critical'}),'Aktuell gemessen');
 });
+test('verified trap faults remain visible with stale or absent poll data without implying health',()=>{
+ for(const snapshot of [null,undefined,{observations:[],capabilities:[]}]){
+  const d={stale:true,snapshot,alarms:[],trap_health:'critical',overall_status:'critical'};
+  assert.equal(overall(d),'critical');d.trap_health='warning';d.overall_status='warning';assert.equal(overall(d),'warning');d.trap_health=null;assert.equal(overall(d),'unknown');
+ }
+ assert.match(alarmConfirmation({evidence:{provisional:true},current_health:'ok'}),/Bestätigung ausstehend/);
+});
+
+test('warning trap evidence cannot reduce a separate critical assessment, and inactive evidence does not claim a current trap fault',()=>{
+ assert.equal(overall({trap_health:'warning',overall_status:'critical',stale:true}),'critical');
+ assert.equal(overall({trap_health:'warning',overall_status:'unknown',stale:true}),'warning');
+ assert.doesNotMatch(alarmConfirmation({evidence:{active:false,confirmation:'confirmed'},current_health:'critical'}),/Trap/);
+ assert.match(alarmConfirmation({evidence:{active:true,confirmation:'confirmed'},current_health:'critical'}),/Abfrage bestätigt/);
+ assert.match(alarmConfirmation({evidence:{active:true,provisional:true,confirmation:'unavailable'}}),/derzeit nicht möglich/);
+});
+
+test('optional unsupported groups do not block scoped generic health; real failures and retained faults still win',()=>{
+ const d=device();d.snapshot.observations=[{key:'snmp:availability',health:'ok'},{key:'snmp:sensor:g1:9',health:'unknown'}];d.snapshot.assessment_exclusions={'snmp:sensor:g1:9':'informational'};
+ d.snapshot.capabilities.push({uri:'snmp:entity',outcome:'unsupported',optional:true},{uri:'snmp:sensors',outcome:'unsupported',optional:true});
+ assert.equal(overall(d),'ok');
+ d.snapshot.capabilities[1].outcome='snmp_timeout';assert.equal(overall(d),'unknown');
+ d.snapshot.capabilities[1].outcome='unsupported';d.snapshot.capabilities[1].optional=false;assert.equal(overall(d),'unknown');
+ d.snapshot.capabilities[1].optional=true;d.alarms=[{key:'snmp:sensor:g1:9',health:'critical'}];assert.equal(overall(d),'critical');
+ d.alarms=[];d.stale=true;assert.equal(overall(d),'unknown');
+});
+
+test('HPE empty slots are not populated while missing storage still blocks health',()=>{
+ const d=device();d.snapshot.snmp={profile:'hpe_ilo5'};
+ const o={key:'psu-empty',health:'unknown',reading:null};d.snapshot.observations.push(o);d.snapshot.assessment_exclusions={[o.key]:'absent'};
+ assert.equal(observationLabel(o,d.snapshot),'Nicht bestückt');assert.equal(overall(d),'ok');
+ d.snapshot.observations.push({key:'snmp:storage',health:'unknown'});assert.equal(overall(d),'unknown');
+ d.alarms=[{key:'old-psu',health:'critical'}];assert.equal(overall(d),'critical');
+});

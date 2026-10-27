@@ -13,6 +13,7 @@ import re
 import json
 import os
 import time
+import tomllib
 from uninstall_wizard import write_wizards
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -26,6 +27,8 @@ a=p.parse_args()
 info=re.sub(r'^arch="[^"]+"',f'arch="{a.arch}"',(ROOT/f'packaging/INFO.{a.profile}').read_text(),flags=re.M)
 version=re.search(r'^version="([^"]+)"',info,re.M).group(1)
 assert re.fullmatch(r'[0-9A-Za-z.-]+',version), 'Invalid version for versioned UI paths'
+product_version=tomllib.loads((ROOT/'Cargo.toml').read_text())['package']['version']
+assert version.split('-')[0]==product_version, 'Product/INFO version mismatch'
 assert json.loads((a.ui_dist/'ui-build.json').read_text())['version']==version, 'Refusing stale UI build: rebuild Vue for this package version'
 # Static-file validators must change when a release changes. Reproducible builds
 # can supply the release's SOURCE_DATE_EPOCH; never reuse it across releases.
@@ -38,6 +41,7 @@ dynamic=subprocess.check_output(['readelf','-d',str(binary)],text=True)
 assert 'Advanced Micro Devices X86-64' in header, 'Expected x86_64 binary for the selected Synology architecture'
 assert 'INTERP' not in segments and '(NEEDED)' not in dynamic, 'Refusing host-linked binary: build static musl target first'
 assert subprocess.run([str(binary),'dev','--help'],capture_output=True).returncode!=0, 'Refusing a binary with local development authentication'
+assert subprocess.check_output([str(binary),'--version']).strip()==f'hardware-monitor {product_version}'.encode(), 'Refusing stale product binary'
 assert (a.ui_dist/'index.html').is_file(), 'Build Vue UI first'
 a.output.mkdir(parents=True,exist_ok=True)
 
@@ -52,6 +56,9 @@ def add_tree(tar,base):
 with tempfile.TemporaryDirectory() as temp:
     temp=Path(temp);payload=temp/'payload';outer=temp/'outer';payload.mkdir();outer.mkdir()
     (payload/'bin').mkdir();shutil.copy2(binary,payload/'bin/hardware-monitor');(payload/'bin/hardware-monitor').chmod(0o755)
+    (payload/'scripts').mkdir()
+    shutil.copy2(ROOT/'packaging/helpers/setup-trap-port.sh',payload/'scripts/setup-trap-port.sh')
+    (payload/'scripts/setup-trap-port.sh').chmod(0o755)
     shutil.copytree(ROOT/'packaging/ui',payload/'ui',dirs_exist_ok=True)
     shutil.copytree(a.ui_dist,payload/'ui',dirs_exist_ok=True)
     entry=f'index-{version}.html'
@@ -71,7 +78,8 @@ with tempfile.TemporaryDirectory() as temp:
     # this alone does not resolve DSM's HTML 403 response.
     shutil.copy2(binary,payload/'ui/api.cgi')
     (payload/'ui/api.cgi').chmod(0o755)
-    shutil.copytree(ROOT/'docs',payload/'docs')
+    # Ignored local archives are not maintained product documentation.
+    shutil.copytree(ROOT/'docs',payload/'docs', ignore=shutil.ignore_patterns('history'))
     for filename in ['LICENSE','README.md','THIRD_PARTY_NOTICES.txt']:
         shutil.copy2(ROOT/filename,payload/filename)
     (outer/'INFO').write_text(info)

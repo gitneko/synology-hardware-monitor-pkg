@@ -1,6 +1,8 @@
 # Backup, restore and event exports
 
-Build **0.8.0-0042** introduces compressed, file-backed backups and restores for large histories. Prior NAS backup/restore acceptance covers the older workflow; the new native download/upload path still needs acceptance on DSM.
+Build **0.8.0-0042** introduces compressed, file-backed backups and restores for large histories. Application backup/restore is user-confirmed for the reported deployment; see the acceptance record below.
+
+SNMP adds database schema 2. Logical archive format 7 combines SNMP with the retention and streaming-backup changes from master. See [Architecture](ARCHITECTURE.md#receiver-identity-and-alarm-ordering).
 
 ## CSV and clearing
 
@@ -20,9 +22,9 @@ A native browser download cannot add `X-SYNO-TOKEN`. For this navigation only, t
 
 Passwords must have at least 12 characters and at most 1024 UTF-8 bytes. They are not retained or recoverable. Store the file and password separately.
 
-The archive includes devices and credentials, inline certificates, settings/templates/languages, retention policies, snapshots, alarms, hardware logs, events, delivery history and audit data. External CA files used by the CLI are embedded as verified PEM certificate contents. The local master key is not exported: device and SMTP secrets travel inside the encrypted archive and are encrypted again with the destination's local key during inspection.
+The archive includes devices and credentials, inline certificates, settings/templates/languages, retention policies, snapshots, alarms, hardware logs, events, delivery history and audit data. External CA files used by the CLI are embedded as verified PEM certificate contents. The local master key and SNMP authoritative engine state are not exported: device, purpose-separated SNMP and SMTP secrets travel inside the encrypted archive and are encrypted again with the destination's local key during inspection.
 
-The binary envelope begins with `HWMON-STREAM-1`, uses a random 16-byte salt, a random 12-byte nonce and PBKDF2-HMAC-SHA256 with 600,000 iterations. Its header, block length and sequence number are authenticated. Every block uses a distinct nonce derived from the random per-file nonce and its 64-bit sequence number. Blocks contain at most 64 KiB of compressed content; an authenticated empty final block and physical EOF are mandatory. Reordered, repeated, missing or trailing blocks are rejected. The logical archive format is **6**; format 5 is reserved for the separately developed SNMP branch. Formats 1–4 from earlier builds remain readable, including migration of event context, acknowledgements and manual submission history. Older apps cannot read the new format. Pending manual jobs are cancelled on restore and unconfirmed previews are discarded.
+The binary envelope begins with `HWMON-STREAM-1`, uses a random 16-byte salt, a random 12-byte nonce and PBKDF2-HMAC-SHA256 with 600,000 iterations. Its header, block length and sequence number are authenticated. Every block uses a distinct nonce derived from the random per-file nonce and its 64-bit sequence number. Blocks contain at most 64 KiB of compressed content; an authenticated empty final block and physical EOF are mandatory. Reordered, repeated, missing or trailing blocks are rejected. The logical archive format is **7**, including retention policies and SNMP configuration, credentials, identities and evidence. Legacy formats 1–5 and streaming format 6 remain readable; missing structures receive safe defaults. Older apps cannot read the new format. Pending manual jobs are cancelled on restore and unconfirmed previews are discarded.
 
 The former **128 MiB payload / 192 MiB file** limits do not apply to new backups. Multi-GiB logical histories are processed with bounded buffers and a small SQLite cache. One individual logical record is limited to 16 MiB. There is no configured total archive-size cap: encryption uses a fresh nonce for each block instead of accumulating the entire archive under one nonce. Available disk space and filesystem limits still apply. The old JSON/Base64 reader retains its 128/192 MiB limits for compatibility with files created by those releases. The new UI does not use the legacy whole-archive JSON endpoints.
 
@@ -46,6 +48,18 @@ Confirm by typing `RESTORE` in English or `WIEDERHERSTELLEN` in German. Restore 
 
 The final transaction pauses ordinary writes and poll-result application; viewing uses a consistent read transaction and job progress/cancellation remain available. Imported alarm acknowledgements retain attribution and reason but require explicit review and re-acknowledgement before suppression becomes active. All devices are paused, automatic email/desktop delivery is disabled, the desktop recipient must be saved again, and old pending deliveries are cancelled. Stale poll results and editor revisions are rejected. Review current alarms, credentials and channel settings before deliberately re-enabling monitoring/delivery. Enabling a channel does not replay old events. Restored retention policies apply at the next manual cleanup or automatic run, first scheduled 24 hours after restore.
 
+Per-device trap inputs and the global SNMP listener are also paused. The receiver ingestion gate covers both legacy and streaming restore; queued trap receipts and pending urgent polls are invalidated by the new runtime epoch. Failed restore retains the prior committed policy. See [receiver and restore boundaries](ARCHITECTURE.md#receiver-identity-and-alarm-ordering).
+
 ## Local upgrade backup
 
 The separate CLI `backup --directory` command makes a private SQLite snapshot and copies its matching master key. It is not the encrypted app archive. The upgrade hook stops the daemon before creating this local snapshot. Protect those files together and retain external CA files separately. A compatible app installation is required for app restore; the archive is not an SPK installer.
+
+Schema-1 databases receive an additional private `pre-snmp-schema1-<random>` SQLite/key backup before the transactional schema-2 migration. Starting with build 0055, the database and matching key are written and synced in a private temporary directory before that complete backup name is published. Normal backup failure removes only the new temporary files; interrupted `.pre-snmp-schema1-*.partial` directories are not complete rollback backups. Post-install initialization performs migration before normal service start; repeat repair keeps existing state and does not rerun a completed schema migration. Retain it for recovery and diagnosis; schema-1 binaries cannot open schema 2. It is not a supported DSM Package Center downgrade procedure. The per-device trap sequence clock is runtime state excluded from logical archives; imported evidence is inactive/non-provisional and never replayed. Local SNMP engine files remain private runtime state, outside logical app backups. An app restore preserves the destination engine identity/counter, and cannot roll it back.
+
+## Native acceptance — 27 October 2026
+
+The user confirmed successful application backup/restore and native DSM upgrade
+**0.8.0-0043 → 0.9.0-0062**. This confirms the reported workflow, without
+asserting a cross-NAS or all-archive-version matrix. DSM Package Center downgrade
+from 0.9.0 to 0.8.0 is outside the supported acceptance path, separate from the
+transactional recovery and cancellation guarantees described above.

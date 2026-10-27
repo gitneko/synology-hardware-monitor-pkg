@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+umask 077
 # Private package state is kept under the DSM 7 package identity.
 mkdir -p /var/packages/HardwareMonitor/etc/private
 chmod 700 /var/packages/HardwareMonitor/etc/private
+# DSM runs postinst on installation, upgrade and repair, before service start.
+# Direct 0.8.0 upgrades must not depend on an earlier SNMP development build.
+/var/packages/HardwareMonitor/target/bin/hardware-monitor initialize >> /var/packages/HardwareMonitor/etc/private/service.log 2>&1

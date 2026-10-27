@@ -31,3 +31,7 @@ test('HTTP 200 application denial, HTTP failure, invalid JSON and expired DSM se
   await assert.rejects(administer(dashboard,{action:'save'},async()=>{calls++;return response({success:false});}));
   assert.equal(calls,1);
 });
+
+test('structured receiver permission failure survives the API boundary',async()=>{
+ await assert.rejects(administer(dashboard,{action:'snmp_receiver_save'},async(url)=>url==='/webman/login.cgi'?login():response({ok:false,code:'snmp_receiver_permission',error:'Permission required'})),e=>e.code==='snmp_receiver_permission'&&e.message==='Permission required');
+});

@@ -282,6 +282,7 @@ mod tests {
     fn log(fingerprint: &str, created: Option<&str>) -> HardwareLog {
         HardwareLog {
             fingerprint: fingerprint.into(),
+            identity: None,
             message: "Hardware event".into(),
             severity: Health::Warning,
             created: created.map(str::to_owned),

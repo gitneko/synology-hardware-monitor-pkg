@@ -1,38 +1,72 @@
 # Implementation status and roadmap
 
-Current package build: **0.8.0-0043**, maintenance and large-backup changes updated on 26 October 2026.
+Current package: **0.9.0-0064**. SNMP polling, trap reception, alarm integration,
+setup UI, maintained documentation and local package/reference checks are
+implemented. The [current acceptance record](VALIDATION.md#current-acceptance)
+includes the user's completed core workflow and duplicate-handling acceptance.
+APC/Eaton/RFC 1628 UPS profiles ship explicitly untested on real hardware.
 
-## Implemented
+## Implemented scope
 
-- Optional local development mode with the complete frontend/backend, persistent private state and real Redfish polling without DSM or application login. Excluded from normal SPKs; see [Development](DEVELOPMENT.md). SNMP remains unimplemented.
+- Least-privileged DSM 7 x86_64 Rust/Tokio service, SQLite, native session/group
+  checks, administrator/viewer API boundary and integrated bilingual Vue window.
+- Explicit Redfish or SNMP primary polling, optional independent traps,
+  reviewed v3 identity, privileged-port helper and explicit clock compatibility.
+- Persistent hardware faults, poll-owned recovery, provisional trap evidence,
+  acknowledgement/reset, deduplication/grouping and independent SMTP/desktop jobs.
+- Retention, full-history CSV, event clearing and file-backed encrypted streaming
+  backup/restore with progress/cancellation and safe paused restoration.
+- Local development without DSM/app login, including Redfish/SNMP through normal
+  collectors; excluded from SPKs. Static protocol/package and upgrade regressions.
 
-- Least-privileged Rust/Tokio daemon, SQLite, integrated DSM 7 window and compiled CGI bridge; device CRUD, checked TLS/private CAs and encrypted credentials.
-- Read-only Redfish discovery/polling, standard health/sensors and selected storage/OEM links, log baseline/deduplication and reachability monitoring.
-- Persistent alarms, confirmed recoveries, optional reminders, retained faults when observations become unknown, PSU representation deduplication and multi-cause summary grouping.
-- Independent SMTP and DSM desktop queues, event filters, per-device enablement, SMTP recipient progress, plain/STARTTLS/implicit TLS, editable templates, local timestamps and manual tests.
-- Independent configurable event/hardware-log retention (90-day defaults), daily/manual cleanup with preview and per-device disabled/all/latest-N log collection. Fixed audit retention of 10,000 entries.
-- Filtered full-history CSV, audited event clearing, disk-backed compressed/encrypted large app backup/restore with progress, cancellation, chunked upload and native file download; paused restart and no replay of pending historical jobs.
-- German/English interface, Automatic/Deutsch/English preference, independent saved channel languages, localized new event messages/API errors/CSV headings and English documentation. Historical free text and manufacturer logs are preserved.
+[SNMP](SNMP.md), [Architecture](ARCHITECTURE.md), [Development](DEVELOPMENT.md),
+[Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md) own the
+maintained contracts. Temporary phase/review/result reports have been consolidated
+and removed. Required numeric source records, dependency licenses/checksums,
+patch reconstruction and regression harnesses remain.
 
-## Confirmed platform and hardware tests
+## Deferred until after the SNMP merge
 
-The package supports Synology DSM 7.0 and later on x86_64 NAS platforms (minimum DSM build: `7.0-40761`). Its functions have been tested with iDRAC7, iDRAC8, iDRAC9 and iLO 5 on the hardware listed in the [README](../README.md).
+Disabling hardware-log reading can leave persisted log-query coverage warnings
+as retained/unassessable alarms (reported iDRAC FaultList HTTP 501 and unsupported
+SEL chronological selection). The scoped correction, lifecycle analysis and
+acceptance criteria are recorded in [Log-query warnings follow-up](LOG-QUERY-WARNINGS-FOLLOWUP.md).
+Status: **recorded, not implemented**. Genuine hardware/SNMP faults and history
+must be preserved.
 
-On RS2421RP+ / DSM 7.4.1-90080, the user confirms installation, the internal window, DSM sign-in, device creation/editing, R340 measurements, explicit PS1 fault handling, Gmail test/reminder email, desktop test/critical reminder with error level and resolved details, and app backup/restore. These reports cover the tested paths, not every possible failure mode. The newly added English paths in build 0017 remain to be accepted on the NAS.
+The same follow-up also records showing the reading mode/Latest-N explanation
+only for a Redfish primary. SNMP does not use that policy; Redfish plus optional
+traps must retain it. Settings and retention behavior must survive the UI change.
+This is likewise deferred, without changing the primary-protocol selector.
 
-The user also confirms testing of the Dell PowerEdge R420 with iDRAC7 and Dell PowerEdge R330 with iDRAC8. The Dell PowerEdge R340 with iDRAC9 has also been tested. See [Hardware compatibility](HARDWARE-COMPATIBILITY.md) for recorded firmware and evidence.
+## Further validation and release work
 
-Authorized testing also verifies the HPE ProLiant DL160 Gen10 with iLO 5 v3.22 using a read-only account: protected Redfish access and complete collector runs with explicit server-certificate pinning. License entitlements and multi-fault behavior were not evaluated.
+These boundaries do not reopen accepted core SNMP checks:
 
-## Next necessary work
+- Broader device/firmware/security coverage, safe multi-fault/partial-recovery
+  scenarios, future real UPS tests and explicit iLO license coverage. Record
+  actual combinations without borrowing Redfish evidence for SNMP.
+- Full DSM Application Privileges/viewer menu integration and directory-service
+  groups; additional language/manual-replay and long-running/disk-pressure checks
+  listed in [NAS acceptance](NAS-ACCEPTANCE.md).
+- Before a commit/push: password/key/runtime-data audit. Before publication:
+  review source identity, checked package/checksums, hosted CI results and the
+  supported matrix. Local checks do not claim a hosted run or uploaded release.
 
-1. **Hardware matrix:** additional model/firmware combinations and explicit iLO license coverage without Advanced; storage/controller/drive faults, sensors and firmware/permission differences. Simultaneous physical faults and partial recovery remain to be tested on real hardware.
-2. **NAS language acceptance:** Automatic detection, explicit English/German, error paths, English CSV, SMTP preview/test and the saved desktop language. Confirm an old build-0016 backup can be restored after upgrading.
-3. **SNMP:** SNMPv3 polling and traps, HPE/Dell profiles/OIDs, secure device association and cross-protocol deduplication. Not implemented.
-4. **DSM permissions/platforms:** full native Application Privileges enforcement and viewer menu access, DSM 7 upgrade/rollback and directory-service behavior.
-5. **Long-running operation:** slow discovery versus fast polling, backoff/jitter, per-log-service baselines and rollover handling, bounded fingerprints, log rotation/crash restart, disk-full behavior, resource measurements and longer outage/recovery tests.
-6. **Release preparation:** reviewed supported-platform matrix, dependency/tool provenance, repeatable release pipeline, supply-chain/security review and appropriate signing/distribution.
+## Later functionality and prerequisites
 
-## Later extensions
+| Item | Dependency / acceptance boundary |
+|---|---|
+| Inform support | Durable ingestion before ACK, retransmission/duplicate and authoritative engine crash/restart review |
+| Simultaneous Redfish + SNMP primaries | Explicit source ownership, freshness, precedence and physical cross-source fault matrix |
+| Automatic protocol fallback | Deliberate policy for identity, source change, stale state and recovery; no masking TLS/auth/coverage failures |
+| Trap-only healthy-state assessment | Independent fault-resolution/freshness semantics; trap silence never means OK |
+| Additional vendors / custom MIBs | Reviewed numeric mappings, source/license provenance, fixtures and hardware evidence; no arbitrary runtime scripting |
+| Additional security modes | Separate justified compatibility/security review with exact wire tests |
+| Forwarding / SNMP SET / power control | Separate feature; current monitoring uses read-only requests |
+| Network thresholds / filters | Explicit per-port policy, counter/reset semantics and safe acceptance; current rates are informational |
+| Charts / rules / maintenance windows | Separate product design, persistence and alarm-lifecycle work |
+| Scheduled app backup | Separate scheduler/delivery/lifecycle design; current export is manual |
 
-Maintenance windows, acknowledgement, flapping/debounce, per-component limits/rules and finer recipient/channel profiles. Historical measurement charts are not implemented; the database currently retains the latest snapshot plus event history. Scheduled app backups and general migration of future incompatible backup formats remain future work. The maintenance/large-backup work originally deferred until after SNMP has been brought forward into master.
+No implementation budget is allocated to these future features. Revisit with a
+concrete requirement; none is required to use the current bounded SNMP workflow.

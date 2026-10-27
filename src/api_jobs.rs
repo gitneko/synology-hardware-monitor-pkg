@@ -191,10 +191,13 @@ impl Api {
                 let shared_store = self.store.clone();
                 let vault = self.vault.clone();
                 let mail = self.mail_gate.clone();
+                let receiver = self.snmp_receiver.clone();
                 let actor = actor.to_owned();
                 let expected = *expected_audit;
                 self.jobs.run(job.clone(), "restore", move |job| {
                     let _submission = mail.blocking_lock_owned();
+                    let _ingestion =
+                        receiver.map(|receiver| receiver.ingestion_gate().blocking_lock_owned());
                     job.check()?;
                     // Drain a poll already writing before the restore phase was announced.
                     // Later polls check the phase again while holding this same mutex.

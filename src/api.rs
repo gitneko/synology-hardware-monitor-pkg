@@ -2,7 +2,7 @@
 use crate::{
     collector::Redfish,
     dsm::{self, AuthContext, BoundaryError, Role},
-    model::Device,
+    model::{Device, PrimaryProtocol},
     store::Store,
     vault::Vault,
 };
@@ -33,6 +33,18 @@ pub struct Request {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    SnmpTrapProbe {
+        id: String,
+        revision: i64,
+    },
+    SnmpReceipts {
+        device: Option<String>,
+        limit: usize,
+    },
+    SnmpReceiverSave {
+        settings: crate::snmp::config::ReceiverSettings,
+        revision: i64,
+    },
     #[default]
     Dashboard,
     Save {
@@ -173,8 +185,18 @@ pub struct DeviceInput {
     pub id: Option<String>,
     pub revision: Option<i64>,
     pub name: String,
+    #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
+    pub primary_protocol: PrimaryProtocol,
+    #[serde(default)]
+    pub snmp_poll: Option<crate::snmp::config::PollConfig>,
+    #[serde(default)]
+    pub snmp_traps: Option<crate::snmp::config::TrapConfig>,
+    #[serde(default)]
+    pub snmp_secrets: crate::snmp::secrets::SecretUpdates,
     pub password: Option<String>,
     pub interval_seconds: u64,
     pub repeat_seconds: Option<i64>,
@@ -182,6 +204,7 @@ pub struct DeviceInput {
     pub enabled: bool,
     #[serde(default)]
     pub tls_profile: crate::model::TlsProfile,
+    #[serde(default)]
     pub trust_mode: TrustMode,
     pub certificate_pem: Option<String>,
 }
@@ -193,11 +216,12 @@ impl Drop for DeviceInput {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustMode {
     Pinned,
     Keep,
+    #[default]
     System,
     Custom,
 }
@@ -205,6 +229,7 @@ pub enum TrustMode {
 pub struct Api {
     pub store: Arc<Mutex<Store>>,
     pub vault: Arc<Vault>,
+    pub(crate) snmp_receiver: Option<Arc<crate::snmp::receiver::Controller>>,
     probes: tokio::sync::Semaphore,
     pub(crate) mail_gate: Arc<tokio::sync::Mutex<()>>,
     pub jobs: Arc<crate::jobs::Manager>,
@@ -228,11 +253,19 @@ impl Api {
             jobs: Arc::new(crate::jobs::Manager::new(&state)),
             store,
             vault,
+            snmp_receiver: None,
             probes: tokio::sync::Semaphore::new(2),
             archives: tokio::sync::Semaphore::new(1),
             replay_turn: std::sync::atomic::AtomicBool::new(true),
             mail_gate: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+    pub fn submission_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.mail_gate.clone()
+    }
+    pub fn with_snmp_receiver(mut self, receiver: Arc<crate::snmp::receiver::Controller>) -> Self {
+        self.snmp_receiver = Some(receiver);
+        self
     }
     pub async fn handle(&self, request: Request) -> Value {
         let language = request.locale;
@@ -323,6 +356,10 @@ impl Api {
                 );
                 if role != Role::Administrator {
                     device.remove("username");
+                    // Security identity/configuration is administrator-only, as
+                    // with existing Redfish usernames. No secret is in either object.
+                    device.remove("snmp_poll");
+                    device.remove("snmp_traps");
                 }
             }
             crate::i18n::dashboard(&mut data, request.locale);
@@ -332,6 +369,31 @@ impl Api {
                 data["runtime"] = json!("local-development");
             }
             data["user"] = json!({"name":actor,"role":role});
+            let (receiver, revision) = store.receiver_settings()?;
+            data["snmp_receiver"] = self
+                .snmp_receiver
+                .as_ref()
+                .map(|service| json!(service.status()))
+                .unwrap_or_else(
+                    || json!({"enabled":receiver.enabled,"active":false,"state":"unavailable"}),
+                );
+            if role != Role::Administrator {
+                if let Some(status) = data["snmp_receiver"].as_object_mut() {
+                    status.remove("devices");
+                    status.remove("listening");
+                }
+            }
+            if data["snmp_receiver"]["epoch"]
+                .as_i64()
+                .is_some_and(|epoch| store.receiver_epoch().ok() != Some(epoch))
+            {
+                data["snmp_receiver"]["active"] = json!(false);
+                data["snmp_receiver"]["state"] = json!("reconfiguring");
+            }
+            if role == Role::Administrator {
+                data["snmp_receiver"]["settings"] = json!(receiver);
+                data["snmp_receiver"]["revision"] = json!(revision);
+            }
             let (mut policy, policy_revision) = store.notification_settings()?;
             if local {
                 policy.desktop_enabled = false;
@@ -431,6 +493,95 @@ impl Api {
             self.mail_gate.lock().await
         };
         match &request.operation {
+            Operation::SnmpReceipts { device, limit } => Ok(
+                json!({"ok":true,"receipts":self.store.lock().unwrap().snmp_receipts(device.as_deref(),*limit)?}),
+            ),
+            Operation::SnmpTrapProbe { id, revision } => {
+                let _permit = self
+                    .probes
+                    .try_acquire()
+                    .map_err(|_| BoundaryError("connection_busy"))?;
+                let (config, cipher, epoch) = {
+                    let store = self.store.lock().unwrap();
+                    let read = store.0.unchecked_transaction()?;
+                    let (device, _, current) =
+                        store.get(id)?.context(BoundaryError("device_conflict"))?;
+                    anyhow::ensure!(current == *revision, BoundaryError("device_conflict"));
+                    let trap = device
+                        .snmp_traps
+                        .as_ref()
+                        .context(BoundaryError("snmp_receiver_config_invalid"))?;
+                    anyhow::ensure!(
+                        matches!(trap.security, crate::snmp::config::Security::V3 { .. }),
+                        BoundaryError("snmp_authentication")
+                    );
+                    let mut config = device
+                        .snmp_poll
+                        .clone()
+                        .context(BoundaryError("snmp_responder_unconfigured"))?;
+                    config.security = trap.security.clone();
+                    config.context_name = trap.context_name.clone();
+                    config.context_engine_id = None;
+                    let cipher = store
+                        .protocol_secret(id, crate::snmp::secrets::Purpose::SnmpTraps)?
+                        .context(BoundaryError("snmp_credentials"))?;
+                    let epoch = store.receiver_epoch()?;
+                    read.commit()?;
+                    (config, cipher, epoch)
+                };
+                let plain = self
+                    .vault
+                    .unseal(&crate::snmp::secrets::Purpose::SnmpTraps.aad(id), &cipher)
+                    .context(BoundaryError("snmp_credentials"))?;
+                let credentials =
+                    serde_json::from_slice::<crate::snmp::secrets::Credentials>(&plain)
+                        .map_err(|_| BoundaryError("snmp_credentials"))?;
+                let result =
+                    crate::snmp::polling::authenticated_identity(&config, &credentials).await;
+                let store = self.store.lock().unwrap();
+                anyhow::ensure!(
+                    store.receiver_epoch()? == epoch
+                        && store.get(id)?.is_some_and(|(_, _, r)| r == *revision),
+                    BoundaryError("device_conflict")
+                );
+                store.audit(
+                    actor,
+                    "snmp.trap.probe",
+                    id,
+                    result
+                        .as_ref()
+                        .map(|_| "ok")
+                        .unwrap_or_else(|e| dsm::error_code(e)),
+                )?;
+                let observed = result?;
+                let time = observed
+                    .engine
+                    .authenticated_time()
+                    .context(BoundaryError("snmp_authentication"))?;
+                Ok(
+                    json!({"ok":true,"revision":revision,"verified":true,"approval_required":true,"engine_id":crate::snmp::notifications::hex(observed.engine.engine_id()),"engine_boots":time.boots(),"target":observed.target,"sys_object_id":observed.sys_object_id}),
+                )
+            }
+            Operation::SnmpReceiverSave { settings, revision } => {
+                settings
+                    .validate()
+                    .context(BoundaryError("snmp_receiver_config_invalid"))?;
+                if let Some(receiver) = &self.snmp_receiver {
+                    receiver
+                        .save(settings.clone(), *revision, actor.into())
+                        .await?;
+                } else {
+                    anyhow::ensure!(
+                        !settings.enabled,
+                        BoundaryError("snmp_receiver_unavailable")
+                    );
+                    self.store
+                        .lock()
+                        .unwrap()
+                        .save_receiver_settings(settings, *revision, actor)?;
+                }
+                Ok(json!({"ok":true,"revision":revision+1}))
+            }
             Operation::MailReplayPreview {
                 event_id,
                 recipient,
@@ -539,6 +690,15 @@ impl Api {
                 let archive =
                     tokio::task::spawn_blocking(move || crate::archive::decrypt(&file, &password))
                         .await??;
+                let _ingestion = if matches!(request.operation, Operation::BackupRestore { .. }) {
+                    if let Some(receiver) = &self.snmp_receiver {
+                        Some(receiver.ingestion_gate().lock_owned().await)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let mut store = self.store.lock().unwrap();
                 if let Operation::BackupRestore {
                     confirm,
@@ -617,7 +777,20 @@ impl Api {
             Operation::Save { device: input } => {
                 let mut store = self.store.lock().unwrap();
                 let (device, secret) = prepare(&store, &self.vault, input)?;
-                store.save_admin(&device, &secret, input.revision, actor)?;
+                let credentials = crate::snmp::persistence::prepare_secrets(
+                    &store,
+                    &self.vault,
+                    &device,
+                    &input.snmp_secrets,
+                )
+                .map_err(|_| anyhow::anyhow!(BoundaryError("snmp_credentials_invalid")))?;
+                store.save_admin_with_snmp(
+                    &device,
+                    &secret,
+                    input.revision,
+                    actor,
+                    Some(&credentials),
+                )?;
                 Ok(json!({"ok":true,"id":device.id}))
             }
             Operation::DesktopTest { level } => {
@@ -654,13 +827,39 @@ impl Api {
                     .map_err(|_| anyhow::anyhow!(BoundaryError("connection_busy")))?;
                 let (device, secret) = {
                     let store = self.store.lock().unwrap();
-                    prepare(&store, &self.vault, input)?
+                    // Keep target/revision and kept credentials in one SQLite
+                    // read snapshot, also against independent CLI writers.
+                    let read = store.0.unchecked_transaction()?;
+                    let (device, redfish) = prepare(&store, &self.vault, input)?;
+                    let secret = if device.primary_protocol == PrimaryProtocol::Snmp {
+                        crate::snmp::persistence::prepare_secrets(
+                            &store,
+                            &self.vault,
+                            &device,
+                            &input.snmp_secrets,
+                        )
+                        .context(BoundaryError("snmp_credentials_invalid"))?
+                        .into_iter()
+                        .find(|(p, _)| *p == crate::snmp::secrets::Purpose::SnmpPoll)
+                        .and_then(|(_, cipher)| cipher)
+                        .context(BoundaryError("snmp_credentials"))?
+                    } else {
+                        redfish
+                    };
+                    read.commit()?;
+                    (device, secret)
                 };
-                let password = self.vault.unseal(&device.id, &secret)?;
-                let result = Redfish::new(&device)
-                    .context(BoundaryError("device_certificate_invalid"))?
-                    .probe(&device.username, std::str::from_utf8(&password)?)
-                    .await;
+                let password = if device.primary_protocol == PrimaryProtocol::Redfish {
+                    self.vault.unseal(&device.id, &secret)?
+                } else {
+                    self.vault
+                        .unseal(
+                            &crate::snmp::secrets::Purpose::SnmpPoll.aad(&device.id),
+                            &secret,
+                        )
+                        .context(BoundaryError("snmp_credentials"))?
+                };
+                let result = crate::collector::probe(&device, &password).await;
                 let outcome = result
                     .as_ref()
                     .map(|_| "ok")
@@ -907,13 +1106,21 @@ fn prepare(store: &Store, vault: &Vault, input: &DeviceInput) -> Result<(Device,
         .id
         .clone()
         .unwrap_or_else(|| format!("d-{}", hex(&random)));
-    let parsed =
-        url::Url::parse(&input.endpoint).context(BoundaryError("device_config_invalid"))?;
+    let endpoint = if input.primary_protocol == PrimaryProtocol::Redfish {
+        url::Url::parse(&input.endpoint)
+            .context(BoundaryError("device_config_invalid"))?
+            .to_string()
+    } else {
+        input.endpoint.clone()
+    };
     let mut device = Device {
         hardware_log: input.hardware_log.clone(),
         id,
+        primary_protocol: input.primary_protocol,
+        snmp_poll: input.snmp_poll.clone(),
+        snmp_traps: input.snmp_traps.clone(),
         name: input.name.trim().into(),
-        endpoint: parsed.to_string(),
+        endpoint,
         username: input.username.clone(),
         interval_seconds: input.interval_seconds,
         repeat_seconds: input.repeat_seconds,
@@ -924,47 +1131,61 @@ fn prepare(store: &Store, vault: &Vault, input: &DeviceInput) -> Result<(Device,
         tls_profile: input.tls_profile,
         pinned_certificate_pem: None,
     };
-    match input.trust_mode {
-        TrustMode::Keep => {
-            if let Some((old, _, _)) = &existing {
-                device.ca_file = old.ca_file.clone();
-                device.ca_pem = old.ca_pem.clone();
-                if old.pinned_certificate_pem.is_some() {
-                    anyhow::ensure!(
-                        old.endpoint == device.endpoint && old.tls_profile == device.tls_profile,
-                        BoundaryError("device_pin_reimport_required")
-                    );
+    if device.primary_protocol == PrimaryProtocol::Redfish {
+        match input.trust_mode {
+            TrustMode::Keep => {
+                if let Some((old, _, _)) = &existing {
+                    device.ca_file = old.ca_file.clone();
+                    device.ca_pem = old.ca_pem.clone();
+                    if old.pinned_certificate_pem.is_some() {
+                        anyhow::ensure!(
+                            old.endpoint == device.endpoint
+                                && old.tls_profile == device.tls_profile,
+                            BoundaryError("device_pin_reimport_required")
+                        );
+                    }
+                    device.pinned_certificate_pem = old.pinned_certificate_pem.clone();
                 }
-                device.pinned_certificate_pem = old.pinned_certificate_pem.clone();
+            }
+            TrustMode::Pinned => {
+                anyhow::ensure!(
+                    input.tls_profile == crate::model::TlsProfile::Idrac7,
+                    BoundaryError("device_certificate_invalid")
+                );
+                let pem = input
+                    .certificate_pem
+                    .as_ref()
+                    .context(BoundaryError("device_certificate_invalid"))?;
+                crate::legacy_tls::certificate(pem)
+                    .context(BoundaryError("device_certificate_invalid"))?;
+                device.pinned_certificate_pem = Some(pem.clone());
+            }
+            TrustMode::System => {}
+            TrustMode::Custom => {
+                let pem = input
+                    .certificate_pem
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!(BoundaryError("device_certificate_invalid")))?;
+                crate::model::validate_certificates(pem)
+                    .context(BoundaryError("device_certificate_invalid"))?;
+                device.ca_pem = Some(pem.clone());
             }
         }
-        TrustMode::Pinned => {
-            anyhow::ensure!(
-                input.tls_profile == crate::model::TlsProfile::Idrac7,
-                BoundaryError("device_certificate_invalid")
-            );
-            let pem = input
-                .certificate_pem
-                .as_ref()
-                .context(BoundaryError("device_certificate_invalid"))?;
-            crate::legacy_tls::certificate(pem)
-                .context(BoundaryError("device_certificate_invalid"))?;
-            device.pinned_certificate_pem = Some(pem.clone());
-        }
-        TrustMode::System => {}
-        TrustMode::Custom => {
-            let pem = input
-                .certificate_pem
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!(BoundaryError("device_certificate_invalid")))?;
-            crate::model::validate_certificates(pem)
-                .context(BoundaryError("device_certificate_invalid"))?;
-            device.ca_pem = Some(pem.clone());
-        }
     }
+    anyhow::ensure!(
+        device.primary_protocol == PrimaryProtocol::Redfish
+            || (input.password.is_none()
+                && input.certificate_pem.is_none()
+                && input.tls_profile == crate::model::TlsProfile::Standard
+                && matches!(input.trust_mode, TrustMode::System)),
+        BoundaryError("device_config_invalid")
+    );
     device
         .validate()
         .context(BoundaryError("device_config_invalid"))?;
+    if device.primary_protocol == PrimaryProtocol::Snmp {
+        return Ok((device, Vec::new()));
+    }
     let _validated_client =
         Redfish::new(&device).context(BoundaryError("device_certificate_invalid"))?;
     let secret = if let Some(password) = &input.password {
@@ -978,7 +1199,9 @@ fn prepare(store: &Store, vault: &Vault, input: &DeviceInput) -> Result<(Device,
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!(BoundaryError("device_password_required")))?;
         anyhow::ensure!(
-            old.endpoint == device.endpoint && old.username == device.username,
+            old.primary_protocol == device.primary_protocol
+                && old.endpoint == device.endpoint
+                && old.username == device.username,
             BoundaryError("device_password_required")
         );
         secret.clone()
@@ -1025,6 +1248,28 @@ fn unhex(value: &str) -> Result<Vec<u8>> {
 }
 pub fn message(code: &str) -> &'static str {
     match code {
+        "snmp_configuration" => "SNMP-Konfiguration ungültig.",
+        "snmp_credentials" => "SNMP-Zugangsdaten fehlen oder passen nicht zur Konfiguration.",
+        "snmp_dns" => "SNMP-Ziel konnte nicht innerhalb des Limits aufgelöst werden.",
+        "snmp_timeout" | "snmp_deadline" => "Zeitlimit der SNMP-Abfrage erreicht. Netzwerk, SNMP-Version, Passphrasen und SHA-1/SHA-256-Auswahl prüfen; der Agent kann Sicherheitsfehler ohne Antwort verwerfen.",
+        "snmp_authentication" => "SNMP-Anmeldung oder Sicherheitsprüfung fehlgeschlagen. Beide Passphrasen und die SHA-1/SHA-256-Auswahl prüfen; ein Digest-Fehler benennt keine eindeutige Ursache.",
+        "snmp_engine_mismatch" => "Bestätigte SNMP-Engine stimmt nicht mit der Konfiguration überein.",
+        "snmp_network" => "SNMP-Ziel ist nicht erreichbar.",
+        "snmp_identity_incomplete" => "SNMP-Ziel antwortet ohne vollständige Systemidentität.",
+        "snmp_request_limit" | "snmp_item_limit" | "snmp_byte_limit" | "snmp_response_limit" => "SNMP-Abfrage hat ein Ressourcenlimit erreicht.",
+        "snmp_agent_error" => "SNMP-Agent hat die Abfrage abgewiesen.",
+        "snmp_non_increasing_oid" | "snmp_invalid_response" => "Ungültige oder nicht fortschreitende SNMP-Antwort.",
+        "snmp_receiver_unavailable" => "SNMP-Empfangsdienst ist nicht verfügbar.",
+        "snmp_receiver_busy" => "SNMP-Empfang wird gerade umgestellt; Status erneut prüfen.",
+        "snmp_receiver_permission" => "Keine Berechtigung für den privilegierten SNMP-Trap-Port. Ein DSM-Administrator muss das mitgelieferte Einrichtungsskript als root ausführen und den Paketdienst neu starten; bisherige Einstellung bleibt erhalten.",
+        "snmp_receiver_bind" => "SNMP-Port oder lokale Adresse ist nicht verfügbar; bisherige Einstellung bleibt erhalten.",
+        "snmp_receiver_rollback" => "SNMP-Portwechsel und Wiederherstellung fehlgeschlagen; Empfangsstatus prüfen.",
+        "snmp_engine_state" => "Lokaler SNMP-Engine-Zustand ist ungültig; v3-Empfang bleibt gesperrt.",
+        "snmp_responder_unconfigured" => "Für die Trap-Prüfung ist ein gespeichertes SNMP-Abfrageziel erforderlich.",
+        "snmp_receipt_limit" => "Es können höchstens 100 SNMP-Empfangsbelege abgerufen werden.",
+        "snmp_not_implemented" => "SNMP-Trap-Empfang ist in dieser Entwicklungsstufe noch nicht verfügbar.",
+        "snmp_credentials_invalid" => "SNMP-Zugangsdaten prüfen. Nach Änderungen an Ziel oder Identität müssen sie ausdrücklich ersetzt oder gelöscht werden.",
+        "snmp_receiver_config_invalid" => "SNMP-Empfang prüfen: Port 1–65535 und gültige, nicht überlappende NAS-Adressen sind erforderlich.",
         "connection_timeout"=>"Die Redfish-Datenbereiche haben nicht rechtzeitig geantwortet. Netzwerk und Auslastung des Controllers prüfen.",
         "retention_invalid"=>"Die Aufbewahrungsdauer muss zwischen 0 und 36.500 Tagen liegen. 0 bedeutet unbegrenzt.",
         "retention_conflict"=>"Die Aufbewahrungsregeln wurden geändert oder die Vorschau ist abgelaufen. Bitte erneut prüfen.",
@@ -1070,7 +1315,7 @@ pub fn message(code: &str) -> &'static str {
         "device_conflict"=>"Das Gerät wurde zwischenzeitlich geändert oder entfernt. Bitte neu laden.",
         "device_password_required"=>"Bitte ein Passwort angeben. Bei Wechsel von Adresse oder Benutzer ist ein neues Passwort erforderlich.",
         "device_certificate_invalid"=>"Das Zertifikat ist ungültig. Bitte nur PEM-Zertifikate ohne privaten Schlüssel importieren.",
-        "device_config_invalid"=>"Geräteangaben prüfen: HTTPS-Adresse ohne Pfad, Name, Benutzer und gültige Intervalle sind erforderlich.",
+        "device_config_invalid"=>"Geräteangaben prüfen: Protokoll, Zieladresse, Name, passende Zugangseinstellungen und gültige Intervalle sind erforderlich.",
         "write_csrf_invalid"=>"Die Bearbeitungssitzung ist abgelaufen. Bitte aktualisieren und erneut versuchen.",
         "write_administrator_required"=>"Nur DSM-Administratoren dürfen Geräte verwalten.",
         "write_https_required"=>"Geräteverwaltung erfordert eine HTTPS-Verbindung zu DSM.",
@@ -1475,6 +1720,10 @@ mod tests {
     fn input() -> DeviceInput {
         DeviceInput {
             hardware_log: Default::default(),
+            primary_protocol: Default::default(),
+            snmp_poll: None,
+            snmp_traps: None,
+            snmp_secrets: Default::default(),
             id: None,
             revision: None,
             name: "Synthetic server".into(),
@@ -1603,6 +1852,329 @@ mod tests {
         assert!(response.get("backup_size").is_none());
         assert!(!response.to_string().contains("private-record-content"));
     }
+    #[tokio::test]
+    async fn snmp_api_is_revisioned_redacted_and_never_falls_back_to_redfish() {
+        let (_dir, api) = instance();
+        let make_input = |id: Option<&str>, revision: Option<i64>, replace: bool| -> DeviceInput {
+            serde_json::from_value(json!({"id":id,"revision":revision,"name":"Synthetic SNMP","primary_protocol":"snmp","snmp_poll":{"host":"127.0.0.1","port":61999,"timeout_ms":100,"retries":0,"security":{"version":"v1"}},"snmp_secrets":{"snmp_poll":if replace {json!({"action":"replace","credentials":{"kind":"community","community":"api-synthetic-community"}})} else {json!({"action":"keep"})}},"interval_seconds":60,"repeat_seconds":null,"alerts_enabled":true,"enabled":true})).unwrap()
+        };
+        let req = request(
+            &api,
+            Operation::Save {
+                device: make_input(None, None, true),
+            },
+        );
+        assert!(api.authorized(&req, "viewer", Role::Viewer).await.is_err());
+        let result = api
+            .authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        let id = result["id"].as_str().unwrap();
+        let admin = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        assert_eq!(admin["data"]["devices"][0]["has_snmp_poll_secret"], true);
+        assert!(!admin.to_string().contains("api-synthetic-community"));
+        let viewer = api
+            .authorized(&request(&api, Operation::Dashboard), "viewer", Role::Viewer)
+            .await
+            .unwrap();
+        assert!(viewer["data"]["devices"][0]["device"]
+            .get("snmp_poll")
+            .is_none());
+        let probe = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::Test {
+                        device: make_input(Some(id), Some(1), false),
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        assert_eq!(probe["code"], "snmp_timeout");
+        let mut changed = make_input(Some(id), Some(1), false);
+        changed.snmp_poll.as_mut().unwrap().host = "other.example".into();
+        let error = api
+            .authorized(
+                &request(&api, Operation::Save { device: changed }),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(dsm::error_code(&error), "snmp_credentials_invalid");
+        assert_eq!(api.store.lock().unwrap().get(id).unwrap().unwrap().2, 1);
+        let mut clear = make_input(Some(id), Some(1), false);
+        clear.enabled = false;
+        clear.snmp_secrets.snmp_poll = crate::snmp::secrets::SecretUpdate::Clear {};
+        api.authorized(
+            &request(&api, Operation::Save { device: clear }),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        assert!(api
+            .store
+            .lock()
+            .unwrap()
+            .protocol_secret(id, crate::snmp::secrets::Purpose::SnmpPoll)
+            .unwrap()
+            .is_none());
+        let audit = api
+            .store
+            .lock()
+            .unwrap()
+            .audit_entries()
+            .unwrap()
+            .to_string();
+        assert!(!audit.contains("api-synthetic-community"));
+        assert_ne!(
+            crate::i18n::text(message("snmp_not_implemented"), crate::i18n::Language::En),
+            message("snmp_not_implemented")
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_configuration_requires_admin_csrf_revision_and_live_service() {
+        let (_dir, api) = instance();
+        let settings = crate::snmp::config::ReceiverSettings {
+            listen_port: 2162,
+            ..Default::default()
+        };
+        let mut req = request(
+            &api,
+            Operation::SnmpReceiverSave {
+                settings: settings.clone(),
+                revision: 0,
+            },
+        );
+        assert!(api.authorized(&req, "viewer", Role::Viewer).await.is_err());
+        req.csrf = None;
+        assert!(api
+            .authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        req.csrf = request(&api, Operation::Dashboard).csrf;
+        api.authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert_eq!(
+            api.store
+                .lock()
+                .unwrap()
+                .receiver_settings()
+                .unwrap()
+                .0
+                .listen_port,
+            2162
+        );
+        assert!(api
+            .authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        let enabled = crate::snmp::config::ReceiverSettings {
+            enabled: true,
+            ..settings
+        };
+        let error = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::SnmpReceiverSave {
+                        settings: enabled,
+                        revision: 1,
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(dsm::error_code(&error), "snmp_receiver_unavailable");
+        assert!(
+            !api.store
+                .lock()
+                .unwrap()
+                .receiver_settings()
+                .unwrap()
+                .0
+                .enabled
+        );
+        let invalid = crate::snmp::config::ReceiverSettings {
+            listen_port: 0,
+            ..Default::default()
+        };
+        let error = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::SnmpReceiverSave {
+                        settings: invalid,
+                        revision: 1,
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(dsm::error_code(&error), "snmp_receiver_config_invalid");
+        assert_eq!(api.store.lock().unwrap().receiver_settings().unwrap().1, 1);
+        // Privileged ports are valid saved configuration even without a live
+        // receiver when disabled; the OS, rather than validation, gates bind.
+        api.authorized(
+            &request(
+                &api,
+                Operation::SnmpReceiverSave {
+                    settings: crate::snmp::config::ReceiverSettings {
+                        listen_port: 162,
+                        ..Default::default()
+                    },
+                    revision: 1,
+                },
+            ),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            api.store
+                .lock()
+                .unwrap()
+                .receiver_settings()
+                .unwrap()
+                .0
+                .listen_port,
+            162
+        );
+    }
+
+    #[tokio::test]
+    async fn trap_diagnostics_require_admin_csrf_and_live_receiver_reports_actual_binding() {
+        let (dir, api) = instance();
+        let service =
+            crate::snmp::receiver::Service::start(dir.path(), api.store.clone(), api.vault.clone());
+        let api = api.with_snmp_receiver(service.controller.clone());
+        for operation in [
+            Operation::SnmpReceipts {
+                device: None,
+                limit: 20,
+            },
+            Operation::SnmpTrapProbe {
+                id: "missing".into(),
+                revision: 1,
+            },
+        ] {
+            let mut req = request(&api, operation);
+            assert_eq!(
+                dsm::error_code(
+                    &api.authorized(&req, "viewer", Role::Viewer)
+                        .await
+                        .unwrap_err()
+                ),
+                "write_administrator_required"
+            );
+            req.csrf = None;
+            assert_eq!(
+                dsm::error_code(
+                    &api.authorized(&req, "admin-test", Role::Administrator)
+                        .await
+                        .unwrap_err()
+                ),
+                "write_csrf_invalid"
+            );
+        }
+        let receipt = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::SnmpReceipts {
+                        device: None,
+                        limit: 20,
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt["receipts"], json!([]));
+        let invalid = api
+            .authorized(
+                &request(
+                    &api,
+                    Operation::SnmpReceipts {
+                        device: None,
+                        limit: 101,
+                    },
+                ),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(dsm::error_code(&invalid), "snmp_receipt_limit");
+        let reserve = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = reserve.local_addr().unwrap().port();
+        drop(reserve);
+        api.authorized(
+            &request(
+                &api,
+                Operation::SnmpReceiverSave {
+                    settings: crate::snmp::config::ReceiverSettings {
+                        enabled: true,
+                        listen_port: port,
+                        listen_addresses: vec!["127.0.0.1".parse().unwrap()],
+                    },
+                    revision: 0,
+                },
+            ),
+            "admin-test",
+            Role::Administrator,
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while service.controller.status().epoch
+                != api.store.lock().unwrap().receiver_epoch().unwrap()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let admin = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let receiver = &admin["data"]["snmp_receiver"];
+        assert_eq!(receiver["active"], true);
+        assert_eq!(receiver["health_updates"], true);
+        assert_eq!(receiver["listening"][0], format!("127.0.0.1:{port}"));
+        let viewer = api
+            .authorized(&request(&api, Operation::Dashboard), "viewer", Role::Viewer)
+            .await
+            .unwrap();
+        assert!(viewer["data"]["snmp_receiver"].get("listening").is_none());
+        assert!(viewer["data"]["snmp_receiver"].get("devices").is_none());
+        service.stop().await;
+    }
+
     #[tokio::test]
     async fn english_dashboard_defaults_keep_authorization_and_existing_settings() {
         let (_dir, api) = instance();
