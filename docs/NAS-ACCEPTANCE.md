@@ -13,6 +13,11 @@ notifications, negative identity/credential checks, recovery, acknowledgement,
 duplicate handling, package/DSM restart, 0043 → 0062 upgrade and backup/restore
 are confirmed. These must not remain generic outstanding items.
 
+Build **0.9.0-0065** installation and both reported log-setting corrections are
+also user-confirmed on 27 October 2026: disabling reading removes its query
+warnings, and the log controls appear only for Redfish, including Redfish with
+optional SNMP traps.
+
 Prior-release confirmations also cover installation/menu/internal DSM window,
 positive sign-in, device editing (address/password/certificate), R340 polling/
 PSU critical status, Gmail test/reminders, DSM desktop test/reminders and older
@@ -27,7 +32,7 @@ is outside the supported path, separate from transactional failure recovery.
 
 | Area | Useful remaining evidence |
 |---|---|
-| Current UI corrections | Native DSM display of total retained event count and the two 0064 spacing corrections; locally tested |
+| Current UI corrections | Native DSM display of total retained event count and the two 0064 spacing corrections; locally tested. The two 0065 log-setting corrections are confirmed above and are no longer open. |
 | Languages | Automatic detection, explicit English/German, errors, translated CSV/new events, channel-specific language and preserved custom/vendor text |
 | Permissions | Denied/viewer users, session expiry, full DSM Application Privileges/menu integration and directory-service group resolution |
 | Manual email replay | Preview/original ID/time, one requested recipient, separate history/Message-ID, unchanged alarm and original delivery; local SMTP/UI coverage exists |

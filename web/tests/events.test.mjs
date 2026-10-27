@@ -1,6 +1,13 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {eventType,eventCategory,deliveryText,filterEvents,sourceTimestamp,capabilityText,groupEvents} from '../src/events.js';
 const events=[{device:'a',kind:'alarm',key:'power',health:'critical'},{device:'a',kind:'hardware_log',key:'log:hash',health:'warning'},{device:'b',kind:'recovery',key:'coverage:/Logs',health:'ok'}];
+test('retired log diagnostics explain cancellation and preserve submitted progress',()=>{
+ for(const reason of ['log_reading_disabled','query_superseded']){
+  const text=deliveryText({mail_reason:reason,desktop_reason:reason,submitted_recipients:1,transport:'smtp',cancelled:true});
+  assert.match(text,/1 bereits per SMTP angenommen/);assert.match(text,/DSM-Desktop:/);
+  assert.match(text,reason==='log_reading_disabled'?/Log-Abfrage deaktiviert/:/durch aktuelle Log-Abfrage ersetzt/);
+ }
+});
 test('historical logs, current hardware and monitoring recovery remain distinct',()=>{
  assert.deepEqual(events.map(eventCategory),['hardware','log','monitoring']);
  assert.deepEqual(events.map(eventType),['Hardwarealarm','Hardwarelog','Abfrage wieder erfolgreich']);

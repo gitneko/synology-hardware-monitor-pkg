@@ -1,6 +1,6 @@
 # Package architecture
 
-Current package: **0.9.0-0064**. Runtime design is described here; user setup
+Current package: **0.9.0-0065**. Runtime design is described here; user setup
 is in [SNMP](SNMP.md), and tested combinations/results are in
 [Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md).
 

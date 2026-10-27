@@ -1,8 +1,9 @@
-# Deferred fix: warnings after disabling hardware-log reading
+# Log-query warnings and Redfish-only log settings
 
-Status: **analysed and recorded; not implemented** (27 October 2026).
-Dependency: implement **after the SNMP merge**, as requested by the user.
-This record does not authorize changes to the current runtime or package build.
+Status: **implemented, locally validated and user-confirmed on the NAS**
+(27 October 2026, **0.9.0-0065**). The user confirms installation and both
+reported fixes: query warnings disappear when log reading is disabled, and
+log controls appear only for Redfish, including Redfish with optional SNMP traps.
 
 ## Report and scope
 
@@ -18,7 +19,9 @@ last observed on 27 October 2026 at 18:09:13. These are failures to query logs,
 not evidence of a current hardware fault or the contents of hardware logs.
 The controller's reason for HTTP 501 has not been established by a live probe.
 
-## Source analysis
+## Source analysis before the fix
+
+The following describes the original failure path.
 
 - `Collector::walk` in `src/collector.rs` skips log resources when
   `HardwareLogRead::Disabled` is selected. It does not emit replacement OK
@@ -43,34 +46,32 @@ The preservation rule is appropriate for genuine hardware faults during lost
 visibility. The missing piece is a separate lifecycle for query diagnostics
 whose source has been intentionally disabled.
 
-Evidence: current source review and the user's screenshot. No controller/NAS
-reproduction or runtime test was performed for this analysis. Existing policy
-checks in `tools/integration_test.py` verify that disabled mode skips log
-requests, but do not check disabling after a persisted log-query warning.
+Initial evidence was source review and the user's screenshot. The new
+regressions now exercise the original failure with synthetic local data; no
+controller/NAS reproduction is claimed.
 
-## Planned correction
+## Implemented correction
 
-Reconcile log-query diagnostics when saving the disabled policy, without
-waiting for a successful poll. Retire only coverage alarms belonging to log
-resources of that device, using exact resource keys and the collector's log
-resource classification rather than labels or a broad alarm deletion.
+`src/log_query.rs` retires exact log-coverage keys, using the collector's shared
+log-resource classification. Device save reconciles them in the same transaction
+as the configuration update, without waiting for a new poll. Startup and both
+archive restore paths also reconcile already-disabled Redfish devices.
 
-Reconcile the saved snapshot/capabilities, alarm-control state and pending
-automatic SMTP/DSM desktop deliveries consistently. A previously stored
-collector summary must not remain faulty solely because of the retired log
-diagnostics; unrelated collection failures must remain visible. Do not claim a
-measured hardware recovery or synthesize a hardware-recovery notification for
-a configuration change. Preserve event history and imported hardware logs
-under their existing retention rules, plus all real hardware/SNMP incidents
-and their acknowledgement state.
+The saved capabilities/observations, corresponding alarm-control rows and pending
+automatic SMTP/DSM desktop jobs are reconciled. A collector summary caused only
+by the removed log failures is retired; independent coverage failures and a
+later Critical connection failure remain visible. Completed deliveries, manual
+mail replay, event contents, imported logs, hardware/SNMP incidents and their
+acknowledgement state are preserved. Configuration changes do not create recovery
+events or claim a new measurement. Cancellation explanations are bilingual.
 
-Cover already-disabled devices carrying stale diagnostics after upgrade or
-restore, and reactivation of log reading. Revision checks must prevent an
-in-flight poll from recreating retired diagnostics. Check the related
-Latest-N to All transition separately: obsolete selection diagnostics should
-be reconciled against a fresh applicable query, not treated as hardware faults.
+Existing revision/epoch checks reject an old in-flight poll after device save or
+restore. Re-enabling reading accepts fresh query failures and retains the normal
+log baseline/deduplication rules. Changing Latest-N to All waits for a fresh
+applicable query: old query-parameter variants are retired only when that same
+resource succeeds with no contradictory failure in the current snapshot.
 
-## Acceptance criteria for the later implementation
+## Acceptance criteria
 
 1. Persist both reported warnings, then disable reading: the log-query alarms
    disappear without a successful poll, including while the target is offline.
@@ -87,14 +88,13 @@ be reconciled against a fresh applicable query, not treated as hardware faults.
 6. Add focused store/API and frontend regression coverage, extend the collector
    integration scenario, then verify the reported transition on the NAS.
 
-## Additional deferred UI fix: show log reading only for Redfish
+## Additional UI fix: show log reading only for Redfish
 
-Status: **source-reviewed and recorded; not implemented** (27 October 2026).
-The user requested checking whether hiding this option for SNMP makes sense.
-Recommendation: **yes, for the currently implemented collectors**. Implement
-after the SNMP merge alongside the deferred log-query warning fix.
+Status: **implemented, locally validated and user-confirmed on the NAS**
+(27 October 2026, **0.9.0-0065**).
+The current SNMP collector does not use the Redfish log-reading policy.
 
-Evidence from the current code:
+Source analysis before the UI fix:
 
 - `collect_with_runtime` in `src/collector.rs` selects exactly one primary
   collector. The Redfish collector receives `Device.hardware_log`; the SNMP
@@ -107,7 +107,7 @@ Evidence from the current code:
 - SNMP trap reception and cross-source event correlation are separate paths.
   References to `hardware_log` in SNMP correlation code do not implement log
   collection or make this reading option control traps.
-- `web/src/DeviceEditor.vue` currently renders the reading mode, Latest-N count
+- `web/src/DeviceEditor.vue` previously rendered the reading mode, Latest-N count
   and retention/chronological-selection explanation unconditionally.
 - `deviceForm`/`deviceInput` in `web/src/snmp.js` preserve and submit the policy
   for either primary protocol. `Device::validate` checks Latest-N limits for
@@ -115,7 +115,7 @@ Evidence from the current code:
   preservation alongside SNMP configuration; this is a compatibility detail,
   not evidence that SNMP uses the setting.
 
-Planned behavior and acceptance:
+Implemented behavior and acceptance:
 
 1. Render the complete log-reading block (mode, count and explanation) only
    when `form.primary_protocol === 'redfish'`, including when changing the
@@ -132,5 +132,28 @@ Planned behavior and acceptance:
    hidden/unfinished Latest-N inputs must not block saving/testing an SNMP
    device. A later return to Redfish must again validate its active log settings.
 6. Cover SNMP-only, Redfish-only, Redfish plus traps, edit/reopen and both protocol
-   switches with focused frontend/form regression checks. No current runtime
-   behavior or tests were changed for this source analysis.
+   switches with focused frontend/form regression checks.
+
+## Local validation and NAS confirmation
+
+Eight new backend/API regression tests cover retirement, queue cancellation,
+completed delivery, acknowledgement/history preservation, exact resource/device
+scope, overall assessment, offline failure preservation, stale polls,
+reactivation, startup, both restore paths and successful query replacement.
+Frontend regressions cover Redfish/SNMP with and without traps, preserved log
+preferences, hidden unfinished counts and cancellation explanations.
+
+The extended `tools/integration_test.py` runs the actual CLI collector against a
+local TLS Redfish server. It creates unsupported chronological selection and HTTP
+501 failures, disables collection without polling, checks alarm/history/hardware
+preservation, verifies no further log requests and checks Latest-N to All after
+fresh success. The full Rust/frontend tests, frontend build, formatting, clippy
+and maintained-documentation link checks pass: 254 Rust tests and 78 frontend
+tests succeed. The existing multi-GiB archive acceptance test remains explicitly
+ignored; the ignored protected-daemon fixture runs through its parent test.
+
+The user confirmed NAS installation and testing of both reported fixes in
+0.9.0-0065 on 27 October 2026. This closes the reported warning-removal and
+Redfish-only control workflows. It does not independently confirm every
+startup/restore, queue-cancellation or controller/firmware variant; those paths
+retain their local regression evidence unless separately reported.

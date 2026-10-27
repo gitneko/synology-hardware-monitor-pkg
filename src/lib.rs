@@ -39,3 +39,4 @@ pub mod acknowledgement;
 mod alarm;
 #[cfg(feature = "local-dev")]
 pub mod local;
+mod log_query;

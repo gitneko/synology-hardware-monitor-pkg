@@ -1002,7 +1002,7 @@ fn log_entry_collection(path: &str, value: &Value) -> bool {
                     .any(|m| m.get("Message").is_some() || m.get("EntryType").is_some())))
 }
 
-fn log_resource(path: &str) -> bool {
+pub(crate) fn log_resource(path: &str) -> bool {
     path.split(['/', '?', '#']).any(|segment| {
         ["LogServices", "LogService", "LogEntries", "Logs"]
             .iter()

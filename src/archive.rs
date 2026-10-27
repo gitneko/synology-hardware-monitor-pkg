@@ -788,6 +788,7 @@ impl Store {
             !tx.prepare("PRAGMA foreign_key_check")?.exists([])?,
             "foreign keys"
         );
+        crate::log_query::reconcile_all_disabled(&tx)?;
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL", [])?;
         crate::mail_replay::cancel(&tx, crate::now())?;
         tx.execute(

@@ -21,6 +21,17 @@ test('device editor defaults to Standard and renders pinned devices with their f
   assert.match(pinned,/AA:BB:CC/);
   assert.match(pinned,/value="keep" selected/);
   assert.doesNotMatch(pinned,/Öffentlich vertrauenswürdiges Zertifikat/);
+  for(const protocol of ['redfish','snmp'])for(const traps of [false,true]){
+   const entry={device:{id:'synthetic',primary_protocol:protocol,hardware_log:{mode:'latest',limit:123},snmp_poll:{host:'192.0.2.10',security:{version:'v2c'},profile:'generic'},snmp_traps:traps?{enabled:true,security:{version:'v2c'},profile:'generic',allowed_sources:['192.0.2.10']}:null}};
+   const html=await renderToString(createSSRApp(Editor,{entry,dashboard:{}}));
+   if(protocol==='redfish'){
+    assert.match(html,/Hardwarelog lesen/);assert.match(html,/Anzahl Hardwarelog-Einträge/);
+    assert.match(html,/value="123"/);assert.match(html,/Die Aufbewahrungsfrist gilt unabhängig/);
+   }else{
+    assert.doesNotMatch(html,/Hardwarelog lesen|Anzahl Hardwarelog-Einträge|Die Aufbewahrungsfrist gilt unabhängig/);
+    assert.match(html,/SNMP-Traps empfangen/);
+   }
+  }
  }finally{
   await server.close();
   if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document;

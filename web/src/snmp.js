@@ -22,12 +22,16 @@ function secretInput(secret,security){
 function pollInput(form){const v3=form.security.version==='v3';return {host:form.host.trim(),port:Number(form.port),security:securityInput(form.security),profile:form.profile,context_name:v3?form.context_name:'',context_engine_id:v3?(form.context_engine_id||null):null,timeout_ms:Number(form.timeout_ms),retries:Number(form.retries)};}
 export function deviceInput(form,entry){
  const old=entry?.device,rf=form.primary_protocol==='redfish';
+ let hardwareLog=form.hardware_log_mode==='latest'?{mode:'latest',limit:Number(form.hardware_log_limit)}:{mode:form.hardware_log_mode};
+ // An unfinished Redfish field must not block a switch to SNMP. Keep the
+ // draft for a switch back, and submit the last valid saved preference.
+ if(!rf&&hardwareLog.mode==='latest'&&(!Number.isInteger(hardwareLog.limit)||hardwareLog.limit<1||hardwareLog.limit>4096))hardwareLog=old?.hardware_log??{mode:'all'};
  const poll=!rf||form.responder?pollInput(form.poll):null;
  if(rf&&poll&&(form.traps_enabled||old?.snmp_traps)){poll.security=securityInput(form.traps.security);poll.context_name=form.traps.security.version==='v3'?form.traps.context_name:'';poll.context_engine_id=null;}
  const traps=form.traps_enabled||old?.snmp_traps?{enabled:form.traps_enabled,allowed_sources:splitList(form.traps.allowed_sources),security:securityInput(form.traps.security),engine_ids:form.traps.security.version==='v3'?splitList(form.traps.engine_ids):[],context_name:form.traps.security.version==='v3'?form.traps.context_name:'',context_engine_ids:form.traps.security.version==='v3'?splitList(form.traps.context_engine_ids):[],timeliness_poll_only:form.traps.security.version==='v3'&&Boolean(form.traps.timeliness_poll_only),profile:form.traps.profile}:null;
  const pollSecret=poll&&!rf?secretInput(form.poll_secret,poll.security):{action:'clear'};
  const trapSecret=traps?secretInput(form.trap_secret,traps.security):{action:'clear'};
- return {hardware_log:form.hardware_log_mode==='latest'?{mode:'latest',limit:Number(form.hardware_log_limit)}:{mode:form.hardware_log_mode},id:old?.id??null,revision:entry?.revision??null,name:form.name,primary_protocol:form.primary_protocol,endpoint:rf?form.endpoint.trim():'',username:rf?form.username:'',password:rf?(form.password||null):null,interval_seconds:Number(form.interval_seconds),repeat_seconds:form.repeat?Number(form.repeat_minutes)*60:null,alerts_enabled:form.alerts_enabled,enabled:form.enabled,tls_profile:rf?form.tls_profile:'standard',trust_mode:rf?form.trust_mode:'system',certificate_pem:rf&&['custom','pinned'].includes(form.trust_mode)?form.certificate_pem:null,snmp_poll:poll,snmp_traps:traps,snmp_secrets:{snmp_poll:pollSecret,snmp_traps:trapSecret}};
+ return {hardware_log:hardwareLog,id:old?.id??null,revision:entry?.revision??null,name:form.name,primary_protocol:form.primary_protocol,endpoint:rf?form.endpoint.trim():'',username:rf?form.username:'',password:rf?(form.password||null):null,interval_seconds:Number(form.interval_seconds),repeat_seconds:form.repeat?Number(form.repeat_minutes)*60:null,alerts_enabled:form.alerts_enabled,enabled:form.enabled,tls_profile:rf?form.tls_profile:'standard',trust_mode:rf?form.trust_mode:'system',certificate_pem:rf&&['custom','pinned'].includes(form.trust_mode)?form.certificate_pem:null,snmp_poll:poll,snmp_traps:traps,snmp_secrets:{snmp_poll:pollSecret,snmp_traps:trapSecret}};
 }
 export function needsTrapIdentity(entry){
  const device=entry?.device,traps=device?.snmp_traps;

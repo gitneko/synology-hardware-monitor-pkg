@@ -201,6 +201,7 @@ impl Store {
             }
             conn.execute("UPDATE schema_version SET version=2", [])?;
         }
+        crate::log_query::reconcile_all_disabled(&conn)?;
         conn.commit()?;
         database.busy_timeout(std::time::Duration::from_secs(5))?;
         Ok(Self(database))
@@ -414,6 +415,7 @@ impl Store {
             tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
             tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
         }
+        crate::log_query::disabled(&tx, d)?;
         tx.execute(
             "INSERT INTO audit_log(actor,action,device,outcome,created) VALUES(?1,?2,?3,'ok',?4)",
             params![
@@ -566,6 +568,7 @@ impl Store {
         }
         let boundary: i64 =
             tx.query_row("SELECT COALESCE(MAX(id),0) FROM events", [], |r| r.get(0))?;
+        crate::log_query::fresh(&tx, d, snapshot)?;
         let groups = crate::alarm::reduce(&tx, d, snapshot, now)?;
         let new_events: Vec<i64> = {
             let mut q = tx.prepare("SELECT id FROM events WHERE device=?1 AND id>?2")?;

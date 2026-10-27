@@ -1740,6 +1740,70 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn disabling_logs_through_device_save_retires_query_warning_immediately() {
+        use crate::model::{Capability, HardwareLogRead, Health, Observation, Snapshot};
+        let (_dir, api) = instance();
+        let mut edited = input();
+        let (original, secret) = prepare(&api.store.lock().unwrap(), &api.vault, &edited).unwrap();
+        let key = "coverage:/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries";
+        {
+            let mut store = api.store.lock().unwrap();
+            store
+                .save_admin(&original, &secret, None, "admin-test")
+                .unwrap();
+            store
+                .apply(
+                    &original,
+                    &Snapshot {
+                        observations: vec![Observation {
+                            key: key.into(),
+                            label: "Synthetic selection failure".into(),
+                            health: Health::Warning,
+                            reading: None,
+                            unit: None,
+                        }],
+                        capabilities: vec![Capability {
+                            uri: key.strip_prefix("coverage:").unwrap().into(),
+                            outcome: "log_selection_unsupported".into(),
+                            optional: false,
+                            http_status: None,
+                            attempts: 1,
+                        }],
+                        ..Default::default()
+                    },
+                    crate::now(),
+                )
+                .unwrap();
+        }
+        edited.id = Some(original.id.clone());
+        edited.revision = Some(1);
+        edited.password = None;
+        edited.hardware_log = HardwareLogRead::Disabled;
+        let req = request(&api, Operation::Save { device: edited });
+        assert!(api
+            .authorized(&req, "viewer-test", Role::Viewer)
+            .await
+            .is_err());
+        assert_eq!(
+            api.store.lock().unwrap().dashboard().unwrap()["devices"][0]["alarms"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        api.authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        let store = api.store.lock().unwrap();
+        assert!(store.dashboard().unwrap()["devices"][0]["alarms"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.get(&original.id).unwrap().unwrap().2, 2);
+        assert_eq!(store.event_entries(-1).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn pinned_trust_is_explicit_bound_to_origin_and_not_returned_as_pem() {
         let (_dir, api) = instance();
         let mut input = input();

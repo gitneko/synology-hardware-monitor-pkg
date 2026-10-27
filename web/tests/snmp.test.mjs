@@ -97,3 +97,19 @@ test('device editing preserves each hardware log mode alongside SNMP configurati
   assert.deepEqual(input.snmp_poll,source.device.snmp_poll);
  }
 });
+
+test('unfinished hidden log count cannot block SNMP or destroy the saved Redfish preference',()=>{
+ const source=structuredClone(entry);source.device.hardware_log={mode:'latest',limit:123};
+ for(const limit of ['',0,4097,1.5,'invalid']){
+  const draft=deviceForm(source);draft.hardware_log_limit=limit;
+  const input=deviceInput(draft,source);
+  assert.deepEqual(input.hardware_log,{mode:'latest',limit:123});
+  assert.equal(draft.hardware_log_limit,limit);
+  assert.deepEqual(deviceForm({device:input}).hardware_log_limit,123);
+ }
+ const draft=deviceForm(source);draft.primary_protocol='redfish';draft.hardware_log_limit=321;
+ draft.primary_protocol='snmp';assert.deepEqual(deviceInput(draft,source).hardware_log,{mode:'latest',limit:321});
+ draft.primary_protocol='redfish';assert.deepEqual(deviceInput(draft,source).hardware_log,{mode:'latest',limit:321});
+ const fresh=deviceForm(entry);fresh.hardware_log_mode='latest';fresh.hardware_log_limit='';
+ assert.deepEqual(deviceInput(fresh,entry).hardware_log,{mode:'all'});
+});

@@ -1,6 +1,6 @@
 # Implementation status and roadmap
 
-Current package: **0.9.0-0064**. SNMP polling, trap reception, alarm integration,
+Current package: **0.9.0-0065**. SNMP polling, trap reception, alarm integration,
 setup UI, maintained documentation and local package/reference checks are
 implemented. The [current acceptance record](VALIDATION.md#current-acceptance)
 includes the user's completed core workflow and duplicate-handling acceptance.
@@ -25,19 +25,16 @@ maintained contracts. Temporary phase/review/result reports have been consolidat
 and removed. Required numeric source records, dependency licenses/checksums,
 patch reconstruction and regression harnesses remain.
 
-## Deferred until after the SNMP merge
+## Log-query diagnostics and device settings
 
-Disabling hardware-log reading can leave persisted log-query coverage warnings
-as retained/unassessable alarms (reported iDRAC FaultList HTTP 501 and unsupported
-SEL chronological selection). The scoped correction, lifecycle analysis and
-acceptance criteria are recorded in [Log-query warnings follow-up](LOG-QUERY-WARNINGS-FOLLOWUP.md).
-Status: **recorded, not implemented**. Genuine hardware/SNMP faults and history
-must be preserved.
-
-The same follow-up also records showing the reading mode/Latest-N explanation
-only for a Redfish primary. SNMP does not use that policy; Redfish plus optional
-traps must retain it. Settings and retention behavior must survive the UI change.
-This is likewise deferred, without changing the primary-protocol selector.
+Implemented after the SNMP merge: disabling Redfish hardware-log reading retires
+its query warnings and pending automatic deliveries immediately, including old
+states at startup/restore. Real hardware/SNMP faults and history remain intact.
+The log-reading controls now appear only for a Redfish primary, including
+Redfish with optional traps. Settings survive protocol changes. The user confirmed
+installation of 0.9.0-0065 and both reported fixes on the NAS on 27 October 2026.
+Local regression coverage and the scope of this confirmation are recorded in the
+[implementation record](LOG-QUERY-WARNINGS-FOLLOWUP.md).
 
 ## Further validation and release work
 

@@ -34,7 +34,12 @@ The connection test now gives specific translated errors for invalid/unsupported
 
 ## Hardware log reading
 
-Build **0.8.0-0042** adds a per-device **Read hardware log** setting:
+The per-device **Read hardware log** setting applies only to a **Redfish**
+primary. The mode, count and explanation are hidden for SNMP. Redfish with
+optional SNMP traps still shows them; trap reception is configured independently.
+Saved log preferences are preserved when switching protocols.
+
+Available modes:
 
 | Mode | Behavior |
 |---|---|
@@ -45,6 +50,14 @@ Build **0.8.0-0042** adds a per-device **Read hardware log** setting:
 Limited retrieval uses the controller's `$orderby=Created desc` and `$top` query support. Rejected queries, observed ascending results or excessive page sizes are reported as incomplete collection; the app does not silently label the first unfiltered page as the newest entries. Entries without a valid `Created` value cannot be placed in a newest selection and are omitted with a warning; All available preserves them. Controllers that do not support these queries should use All available or Disabled. Pagination, individual response limits and the normal resource/time/byte/item budgets still apply in both reading modes. All available is not a promise to fetch an arbitrarily large controller database in one poll; incomplete scans remain explicitly marked.
 
 Changing the reading mode establishes a new log baseline after the next complete scan, avoiding notifications for historical entries exposed by the new selection. Already stored recent logs are preserved. The setting is independent of [hardware-log retention](HISTORY-RETENTION.md): requesting 100 entries does not reduce stored history to 100, disabling collection does not disable cleanup, and even All available cannot reimport entries older than the configured retention cutoff.
+Disabling reading immediately retires stored log-query coverage warnings (such
+as HTTP 501 or unsupported chronological selection) and their pending automatic
+notifications, without waiting for a poll. It also reconciles a collector summary
+caused solely by those warnings. Already-disabled devices are reconciled on
+startup or restore. Real hardware faults, independent collection/connection
+failures, completed deliveries and history are preserved; no recovery is inferred
+from the setting change. Re-enabling reading can report fresh query failures.
+
 ## SNMP devices and optional traps
 
 Select SNMP for primary polling without requiring an HTTPS origin, certificate

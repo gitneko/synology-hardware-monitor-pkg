@@ -1,4 +1,8 @@
 {
+  "E-Mail: Log-Abfrage deaktiviert · {0} bereits per SMTP angenommen": "Email: log reading disabled · {0} already accepted by SMTP",
+  "E-Mail: durch aktuelle Log-Abfrage ersetzt · {0} bereits per SMTP angenommen": "Email: superseded by current log query · {0} already accepted by SMTP",
+  "{0} · DSM-Desktop: Log-Abfrage deaktiviert": "{0} · DSM desktop: log reading disabled",
+  "{0} · DSM-Desktop: durch aktuelle Log-Abfrage ersetzt": "{0} · DSM desktop: superseded by current log query",
   "Abbrechen": "Cancel",
   "+ Gerät hinzufügen": "+ Add device",
   "Abfrage weiterhin gestört": "Monitoring query still failing",

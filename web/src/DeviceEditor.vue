@@ -85,8 +85,10 @@ function trap(event){
       </template>
       </template>
       <div class="form-columns"><label>{{t("Pause zwischen Abfragen (Sekunden)")}}<input v-model="form.interval_seconds" type="number" min="30" max="86400" step="1" required></label><label v-if="form.repeat">{{t("Alarmwiederholung (Minuten)")}}<input v-model="form.repeat_minutes" type="number" min="5" step="1" required></label></div>
+      <template v-if="form.primary_protocol==='redfish'">
       <div class="form-columns"><label>{{t("Hardwarelog lesen")}}<select v-model="form.hardware_log_mode"><option value="disabled">{{t("Deaktiviert")}}</option><option value="all">{{t("Alle verfügbaren Einträge")}}</option><option value="latest">{{t("Die neuesten N Einträge")}}</option></select></label><label v-if="form.hardware_log_mode==='latest'">{{t("Anzahl Hardwarelog-Einträge")}}<input v-model="form.hardware_log_limit" type="number" min="1" max="4096" step="1" required></label></div>
       <p class="form-note">{{t("Die Aufbewahrungsfrist gilt unabhängig von der Abfragemenge. Bereits gespeicherte junge Einträge bleiben erhalten. Die begrenzte Abfrage benötigt Unterstützung für eine chronologische Auswahl durch den Controller; fehlende Unterstützung wird als Abfrageproblem angezeigt.")}}</p>
+      </template>
       <label class="check"><input v-model="form.enabled" type="checkbox">{{t("Überwachung aktiv")}}</label>
       <label class="check"><input v-model="form.repeat" type="checkbox">{{t("Anhaltende Alarme regelmäßig erneut erfassen")}}</label>
       <label class="check"><input v-model="form.alerts_enabled" type="checkbox">{{t("Benachrichtigungen für dieses Gerät aktivieren")}}</label>

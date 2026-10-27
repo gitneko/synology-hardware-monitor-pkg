@@ -14,6 +14,8 @@ export function eventType(event) {
   return category==='monitoring'?t("Abfragewarnung"):t("Hardwarealarm");
 }
 export function emailDeliveryText(event) {
+  if(event.mail_reason==='log_reading_disabled')return t('E-Mail: Log-Abfrage deaktiviert · {0} bereits per SMTP angenommen',event.submitted_recipients??0);
+  if(event.mail_reason==='query_superseded')return t('E-Mail: durch aktuelle Log-Abfrage ersetzt · {0} bereits per SMTP angenommen',event.submitted_recipients??0);
   if(event.mail_reason==='reset')return event.submitted_recipients?t('E-Mail: durch Zurücksetzen storniert · {0} bereits per SMTP angenommen',event.submitted_recipients):t('E-Mail: durch Zurücksetzen storniert');
   if(event.mail_reason==='same_occurrence')return t('Gleiches Ereignis bereits gemeldet');
   if(event.mail_reason==='acknowledged')return event.submitted_recipients?t('E-Mail: durch Bestätigung unterdrückt · {0} bereits per SMTP angenommen',event.submitted_recipients):t('E-Mail: durch Bestätigung unterdrückt');
@@ -35,6 +37,8 @@ export function emailDeliveryText(event) {
 }
 export function deliveryText(event) {
   const email=emailDeliveryText(event),desktop=event.desktop;
+  if(event.desktop_reason==='log_reading_disabled')return t('{0} · DSM-Desktop: Log-Abfrage deaktiviert',email);
+  if(event.desktop_reason==='query_superseded')return t('{0} · DSM-Desktop: durch aktuelle Log-Abfrage ersetzt',email);
   if(event.desktop_reason==='reset')return t('{0} · DSM-Desktop: durch Zurücksetzen storniert',email);
   if(event.desktop_reason==='acknowledged')return t('{0} · DSM-Desktop: durch Bestätigung unterdrückt',email);
   if(event.desktop_reason==='same_occurrence')return t('{0} · DSM-Desktop: gleiches Ereignis bereits gemeldet',email);

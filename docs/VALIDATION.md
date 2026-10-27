@@ -1,6 +1,6 @@
 # Validation and evidence boundaries
 
-Current package: **0.9.0-0064**. Local source/reference/package checks,
+Current package: **0.9.0-0065**. Local source/reference/package checks,
 authorized live read-only collector runs and user-reported NAS acceptance are
 separate evidence. The [compatibility matrix](HARDWARE-COMPATIBILITY.md) records
 actual combinations; [SNMP](SNMP.md) describes operation and limitations.
@@ -19,6 +19,7 @@ coverage of every model, firmware, security variant or physical failure:
 | 27 October 2026 | HPE iLO, Generic and Network Generic SNMP operation |
 | 27 October 2026 | Native DSM upgrade **0.8.0-0043 → 0.9.0-0062**, application backup and restore |
 | 27 October 2026 | Incorrect credentials, unknown sender, changed Engine-ID checks, fault → recovery, operator acknowledgement and **duplicate handling** |
+| 27 October 2026 | Installation of **0.9.0-0065** and both reported fixes tested on the NAS: disabling log reading removes its query warnings; log settings appear only for Redfish, including Redfish with optional SNMP traps |
 
 The changed-ID report describes rejection already on save; it does not establish
 a separately observed live replacement-engine datagram test. Generic/Network/HPE

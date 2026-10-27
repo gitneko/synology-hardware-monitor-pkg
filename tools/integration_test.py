@@ -42,6 +42,8 @@ class Mock(BaseHTTPRequestHandler):
             self.send_error(401); return
         if state["reject"]:
             self.send_error(401); return
+        if state.get('log_http_failure') and '/LogServices/IML/Entries' in self.path:
+            self.send_error(501); return
         if self.path == "/redfish/v1/":
             self.send_response(308)
             self.send_header("Location", "https://example.invalid/redfish/v1/" if state["redirect"] else "/redfish/v1/root/")
@@ -242,7 +244,27 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
             selected=snapshot()['devices'][0]['snapshot']
             assert not selected['logs_complete'] and selected['logs']==[]
             assert any(c['outcome']=='log_selection_unsupported' for c in selected['capabilities'])
+        # Selection warnings must disappear immediately on disabling, without a
+        # new poll. Real PSU faults and event history must remain unchanged.
+        before=snapshot();before_events=len(before['events'])
+        config['hardware_log']={'mode':'disabled'};put()
+        disabled=snapshot()['devices'][0]
+        assert not any(a['key'].startswith('coverage:') and '/LogServices' in a['key'] for a in disabled['alarms'])
+        assert not any(a['key']=='collector' for a in disabled['alarms'])
+        assert len(snapshot()['events'])==before_events
+        assert any(a['health']=='critical' for a in disabled['alarms'])
+        requests.clear();run('poll-once')
+        assert not any('/LogServices' in path for path in requests)
         state.pop('log_selection');config['hardware_log']={'mode':'all'};put()
+        state['log_http_failure']=True;run('poll-once')
+        assert any(a['key'].startswith('coverage:') and '/LogServices' in a['key'] for a in snapshot()['devices'][0]['alarms'])
+        before_events=len(snapshot()['events']);config['hardware_log']={'mode':'disabled'};put()
+        assert not any(a['key'].startswith('coverage:') and '/LogServices' in a['key'] for a in snapshot()['devices'][0]['alarms'])
+        assert len(snapshot()['events'])==before_events
+        state.pop('log_http_failure');config['hardware_log']={'mode':'latest','limit':2};put()
+        state['log_selection']='ascending';run('poll-once')
+        state.pop('log_selection');config['hardware_log']={'mode':'all'};put();run('poll-once')
+        assert not any(a['key'].startswith('coverage:') and '/LogServices' in a['key'] for a in snapshot()['devices'][0]['alarms'])
         state["redirect"] = True; run("poll-once", success=False); state["redirect"] = False
         state["reject"] = True; run("poll-once", success=False); state["reject"] = False
         for path in (temp / "private").glob("*"):

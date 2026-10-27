@@ -1,8 +1,24 @@
-# 0.9.0-0064 — SNMP development package
+# 0.9.0-0065 — Hardware-log query corrections
 
 Unsigned DSM 7 x86_64 package with explicit SNMP polling and optional traps
 alongside Redfish. See [SNMP setup and limitations](SNMP.md),
 [Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md).
+
+## Build 0065
+
+- Disabling Redfish hardware-log reading immediately retires its stored query
+  warnings and pending automatic notifications, including old states at startup
+  and restore. Hardware/SNMP faults, acknowledgements and history are preserved.
+- Keep independent connection/coverage failures visible; configuration changes
+  do not create measured recoveries. Fresh applicable queries can replace stale
+  chronological-selection diagnostics after switching to All available.
+- Show log-reading controls only for a Redfish primary, including Redfish with
+  optional SNMP traps. Preserve saved preferences across protocol changes and
+  prevent unfinished hidden log counts from blocking SNMP device saves.
+- Regression coverage includes the actual collector against synthetic HTTP 501
+  and unsupported-selection responses. Installation and both reported fixes are
+  user-confirmed on the NAS (27 October 2026); see the
+  [implementation and validation record](LOG-QUERY-WARNINGS-FOLLOWUP.md).
 
 ## Build 0064
 
@@ -101,8 +117,9 @@ power control, arbitrary MIB imports, simultaneous dual primaries or trap-only
 healthy-state assessment. HPE index-only traps lack a general Redfish crosswalk.
 Reference load/corpus checks do not certify complete UDP DoS resistance or NAS
 capacity. Full native DSM Application Privileges/viewer menu integration remains
-separate. The log-query-warning/Redfish-only log-controls correction is still
-[deferred until after the SNMP merge](LOG-QUERY-WARNINGS-FOLLOWUP.md).
+separate. The log-query-warning and Redfish-only log-controls corrections are
+implemented and user-confirmed in 0065; see the
+[validation record](LOG-QUERY-WARNINGS-FOLLOWUP.md).
 
 Build tools retain static executable/protocol/lifecycle/version/source-identity
 checks and dependency licenses. Local validation does not claim a hosted CI run

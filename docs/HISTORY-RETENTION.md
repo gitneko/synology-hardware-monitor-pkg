@@ -24,7 +24,7 @@ The retention rule also filters newly received hardware logs before storing them
 [Device settings](DEVICE-MANAGEMENT.md#hardware-log-reading) control whether to read hardware logs and how many to request: disabled, all available, or newest N. This is independent of retention:
 
 - A limit of 100 does not trim the database to 100 records. Newer records accumulate over successive polls until their retention age expires.
-- Disabling reading stops future collection, while existing entries remain subject to the global hardware-log retention period.
+- Disabling reading stops future collection, while existing entries remain subject to the global hardware-log retention period. Stored warnings about querying those disabled log resources are retired immediately, along with their pending automatic notifications; this does not remove hardware faults, event history or imported logs.
 - Reading all available logs does not override the retention cutoff.
 
 Hardware logs are separate from application events generated from them. Deleting an old hardware-log row does not independently delete its application event; the event policy decides that event's lifetime.
