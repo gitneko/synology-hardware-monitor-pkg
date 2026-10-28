@@ -172,6 +172,7 @@ impl Store {
           CREATE TRIGGER IF NOT EXISTS audit_retention AFTER INSERT ON audit_log BEGIN
             DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 10000);
           END;")?;
+        crate::webhook::initialize(&conn)?;
         crate::acknowledgement::initialize(&conn)?;
         crate::mail_replay::initialize(&conn)?;
         crate::retention::initialize(&conn)?;
@@ -410,10 +411,12 @@ impl Store {
             tx.execute("DELETE FROM hardware_logs WHERE device=?1", [&d.id])?;
             tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
             tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
+            tx.execute("UPDATE webhook_jobs SET cancelled=1,error='cancelled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
         }
         if !d.alerts_enabled || !d.enabled {
             tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
             tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
+            tx.execute("UPDATE webhook_jobs SET cancelled=1,error='cancelled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1)",[&d.id])?;
         }
         crate::log_query::disabled(&tx, d)?;
         tx.execute(
@@ -448,6 +451,7 @@ impl Store {
         );
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[id])?;
         tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1)",[id])?;
+        tx.execute("UPDATE webhook_jobs SET cancelled=1,error='cancelled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1)",[id])?;
         tx.execute("DELETE FROM alarm_state WHERE device=?1", [id])?;
         tx.execute("DELETE FROM hardware_logs WHERE device=?1", [id])?;
         crate::snmp::persistence::invalidate(&tx)?;
@@ -563,6 +567,7 @@ impl Store {
                 merge_alarm_alias(&tx, &d.id, alias, canonical)?;
                 tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT old.id FROM events old WHERE old.device=?1 AND old.key=?2 AND old.kind!='hardware_log' AND EXISTS(SELECT 1 FROM events peer WHERE peer.device=old.device AND peer.key=?3 AND peer.created=old.created AND peer.kind=old.kind AND peer.health=old.health AND peer.message=old.message))",params![d.id,alias,canonical])?;
                 tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT old.id FROM events old WHERE old.device=?1 AND old.key=?2 AND old.kind!='hardware_log' AND EXISTS(SELECT 1 FROM events peer WHERE peer.device=old.device AND peer.key=?3 AND peer.created=old.created AND peer.kind=old.kind AND peer.health=old.health AND peer.message=old.message))",params![d.id,alias,canonical])?;
+                tx.execute("UPDATE webhook_jobs SET cancelled=1,error='cancelled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT old.id FROM events old WHERE old.device=?1 AND old.key=?2 AND old.kind!='hardware_log' AND EXISTS(SELECT 1 FROM events peer WHERE peer.device=old.device AND peer.key=?3 AND peer.created=old.created AND peer.kind=old.kind AND peer.health=old.health AND peer.message=old.message))",params![d.id,alias,canonical])?;
                 tx.execute("UPDATE events SET canonical_key=?3 WHERE device=?1 AND key=?2 AND kind!='hardware_log'",params![d.id,alias,canonical])?;
             }
         }
@@ -862,6 +867,7 @@ impl Store {
                 .map_or_else(|| json!([]), |keys| json!(keys));
             e["mail_reason"] = json!(mail_reason);
             e["desktop_reason"] = json!(desktop_reason);
+            e["webhooks"] = serde_json::to_value(self.webhook_event_status(id)?)?;
             e["desktop"]=self.0.query_row("SELECT delivered,attempts,error,cancelled,recipient FROM desktop_jobs WHERE event_id=?1",[id],|r|Ok(json!({"delivered":r.get::<_,Option<i64>>(0)?,"attempts":r.get::<_,i64>(1)?,"error":r.get::<_,Option<String>>(2)?,"cancelled":r.get::<_,bool>(3)?,"recipient":r.get::<_,String>(4)?}))).optional()?.unwrap_or(Value::Null);
         }
         Ok(events)
@@ -1037,11 +1043,12 @@ pub(crate) fn group_notifications(
     boundary: i64,
 ) -> Result<()> {
     // Apply before transaction commit: neither worker can submit these new jobs.
-    tx.execute("UPDATE events SET correlated_keys=?3 WHERE device=?1 AND key=?2 AND (id>?4 OR id IN (SELECT event_id FROM outbox WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM desktop_jobs WHERE delivered IS NULL AND cancelled=0))",params![device,parent,serde_json::to_string(anchors)?,boundary])?;
+    tx.execute("UPDATE events SET correlated_keys=?3 WHERE device=?1 AND key=?2 AND (id>?4 OR id IN (SELECT event_id FROM outbox WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM desktop_jobs WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM webhook_jobs WHERE delivered IS NULL AND cancelled=0 AND permanent=0))",params![device,parent,serde_json::to_string(anchors)?,boundary])?;
     tx.execute("UPDATE events SET mail_reason='aggregate' WHERE device=?1 AND key=?2 AND (id>?3 OR id IN (SELECT event_id FROM outbox WHERE delivered IS NULL AND cancelled=0))",params![device,parent,boundary])?;
     tx.execute("UPDATE events SET desktop_reason='aggregate' WHERE device=?1 AND key=?2 AND (id>?3 OR id IN (SELECT event_id FROM desktop_jobs WHERE delivered IS NULL AND cancelled=0))",params![device,parent,boundary])?;
     tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2)",params![device,parent])?;
     tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2)",params![device,parent])?;
+    tx.execute("UPDATE webhook_jobs SET cancelled=1,error='cancelled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2)",params![device,parent])?;
     Ok(())
 }
 
@@ -1198,6 +1205,7 @@ pub(crate) fn event(
         "UPDATE events SET mail_reason=?2,desktop_reason=?3 WHERE id=?1",
         params![event_id, mail_reason, desktop_reason],
     )?;
+    crate::webhook::enqueue(tx, d, event_id, key, kind, health, acknowledged, now)?;
     Ok(event_id)
 }
 

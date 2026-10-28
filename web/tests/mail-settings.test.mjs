@@ -11,7 +11,8 @@ test('SMTP acknowledgement, partial failure, queued retry and cancellation remai
 test('plaintext and configured event time are explicit; reason and desktop status stay separate',()=>{
  const input=mailInput({...form,port:'25',security:'plain',authentication:false,ca_pem:'old CA',timezone:'Europe/Zurich',date_format:'%d.%m.%Y %H:%M:%S'},2);
  assert.equal(input.settings.port,25);assert.equal(input.settings.security,'plain');assert.equal(input.settings.ca_pem,null);assert.equal(input.settings.timezone,'Europe/Zurich');
- assert.match(deliveryText({mail_reason:'device_disabled'}),/am Gerät deaktiviert/);
+ assert.equal(deliveryText({mail_reason:'device_disabled',desktop_reason:'device_disabled'}),'Benachrichtigungen für dieses Gerät deaktiviert');
+ assert.match(deliveryText({mail_reason:'device_disabled',transport:'smtp',delivered:123,submitted_recipients:1,total_recipients:1}),/Vom SMTP-Server angenommen/);
  assert.match(deliveryText({mail_reason:'mail_disabled',desktop:{delivered:123}}),/E-Mail: automatischer Versand deaktiviert · DSM-Desktop: an DSM übergeben/);
  assert.match(deliveryText({mail_reason:'filtered',desktop_reason:'filtered'}),/durch Ereignisauswahl ausgeschlossen/);
 });

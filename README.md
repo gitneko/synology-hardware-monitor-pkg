@@ -8,20 +8,20 @@ Due to thirdparty package limitations imposed by Synology, this package does not
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current build: 0.9.0-0065.** The Package Center title is **Hardware Monitor**.
+**Current version: 0.10.0.** Adds [outgoing HTTP/HTTPS webhooks](docs/WEBHOOKS.md) with custom text, JSON, form and multipart messages. The Package Center title is **Hardware Monitor**.
 
 ## Features
 
 - A lightweight Rust/Tokio background service, SQLite persistence and a Vue application inside the DSM 7 desktop. No Task Scheduler or loose polling scripts.
 - Read-only Redfish polling with capability discovery, standard/selected OEM storage links, power supplies, fans, temperatures, hardware logs and reachability.
 - Explicit SNMPv1/v2c/v3 primary polling with bounded manufacturer profiles, independent encrypted credentials and coverage diagnostics.
-- Optional SNMP traps on UDP port (default 1162; [administrative setup for privileged ports](docs/TRAP-PRIVILEGED-PORTS.md)), reviewed v3 sender identities and provisional alarms confirmed by primary polling. [0.9.0 development notes](docs/RELEASE-NOTES-0.9.0.md).
+- Optional SNMP traps on UDP port (default 1162; [administrative setup for privileged ports](docs/TRAP-PRIVILEGED-PORTS.md)), reviewed v3 sender identities and provisional alarms confirmed by primary polling. [0.9.0 release notes](docs/RELEASE-NOTES-0.9.0.md).
 - Persistent faults, confirmed recoveries, optional reminders, deduplication and grouping of linked summary alarms without merging independent component faults.
-- Acknowledge known hardware faults with a reason: blue status, persistent suppression for email/desktop, automatic summary assessment and reactivation on recovery or worsening. [Acknowledgement rules](docs/ALARM-ACKNOWLEDGEMENT.md).
-- Independently configured SMTP email and native DSM desktop notifications, event filters and per-device delivery enablement. Editable templates, local timestamps and test actions.
+- Acknowledge known hardware faults with a reason: blue status, persistent suppression for email, desktop and webhooks, automatic summary assessment and reactivation on recovery or worsening. [Acknowledgement rules](docs/ALARM-ACKNOWLEDGEMENT.md).
+- Independently configured SMTP email, native DSM desktop notifications and [outgoing HTTP/HTTPS webhooks](docs/WEBHOOKS.md), with event filters and per-device delivery enablement. Webhooks support generic/custom JSON, text, form fields, Discord and Slack, with per-target language, templates, previews and tests.
 - Manually resend a recorded event to one saved email recipient, with a current-template preview and separate delivery history, without changing the alarm or original event. [Manual email replay](docs/MAIL-REPLAY.md).
 - Separate configurable event/hardware-log retention (90-day defaults), daily and immediate cleanup with preview, and per-device hardware-log reading controls. [Retention rules](docs/HISTORY-RETENTION.md).
-- Filtered full-history CSV, audited event clearing and compressed, streaming, password-encrypted multi-GiB backup/restore, including device/SMTP credentials. Background jobs support progress/cancellation; restore pauses monitoring/delivery and cancels old pending jobs.
+- Filtered full-history CSV, audited event clearing and compressed, streaming, password-encrypted multi-GiB backup/restore, including device, SMTP, SNMP and webhook credentials. Background jobs support progress/cancellation; restore pauses monitoring/delivery and cancels old pending jobs.
 - Optional data deletion in the DSM uninstall wizard. Data is retained by default; opt in to remove settings, credentials, history, keys and local upgrade backups. [Uninstall behavior](docs/UNINSTALL.md).
 - **German and English:** Automatic/Deutsch/English interface selection, separate saved languages for background channels, localized new event text/API messages/CSV headings and English documentation. Custom templates, vendor text and legacy event text are preserved.
 
@@ -77,6 +77,8 @@ English interface, using synthetic example data; no real credentials or private 
 - [DSM privilege findings](docs/DSM-PRIVILEGES.md)
 - [Validation](docs/VALIDATION.md), [roadmap](docs/ROADMAP.md)
 - [SNMP setup, profiles, traps and troubleshooting](docs/SNMP.md)
+- [Outgoing webhooks](docs/WEBHOOKS.md)
+- [0.10.0 release notes](docs/RELEASE-NOTES-0.10.0.md)
 - [0.9.0 release notes](docs/RELEASE-NOTES-0.9.0.md)
 
 Runtime state, passwords, tokens and raw private controller responses do not belong in source archives or fixtures.

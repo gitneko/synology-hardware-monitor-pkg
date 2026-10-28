@@ -1,6 +1,6 @@
 # Package architecture
 
-Current package: **0.9.0-0065**. Runtime design is described here; user setup
+Current version: **0.10.0**. Runtime design is described here; user setup
 is in [SNMP](SNMP.md), and tested combinations/results are in
 [Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md).
 
@@ -52,7 +52,7 @@ Build 0030 also follows the standard Storage `Controllers` collection and its ob
 
 Build 0034 adds a separate `absent` applicability reason for explicitly absent components, unless another observation contradicts absence or reports a fault/condition. Raw health remains Unknown, unavailable readings stay suppressed and retained incidents/acknowledgements are not cleared. Untyped members of a typed Power resource's `PowerControl` array can be informational when they contain a finite consumption value and no Status. Arbitrary watt-reading sensors do not inherit this rule. An omitted Volumes property can additionally be neutral for a healthy Enabled Storage resource with a complete empty Drives array and exclusively SATA-capable linked controllers. Every advertised controller representation must be observed and free of contradictory inventory/status; advertised collections must be complete. Null/advertised-but-unread Volumes, missing controller data, other protocols, pagination, malformed counts and fault conditions keep the conservative behavior. Neutral badges explain absence, information or empty controllers without changing vendor component names.
 
-Build 0037 adds an incident-token/device-revision-bound administrator reset. One immediate transaction removes the chosen alarm/acknowledgement, cancels pending automatic jobs for that canonical resource and records an audit entry. Events, measurements, accepted SMTP records and explicit historical replays remain. The common submission gate prevents the next email/desktop job from starting after the reset. The next confirmed faulty poll creates a new incident. See [Alarm reset](ALARM-RESET.md).
+Build 0037 adds an incident-token/device-revision-bound administrator reset. One immediate transaction removes the chosen alarm/acknowledgement, cancels pending automatic jobs for that canonical resource and records an audit entry. Events, measurements, accepted SMTP records and explicit historical replays remain. Automatic delivery gates prevent the next matching email, desktop or webhook job from starting after the reset. The next confirmed faulty poll creates a new incident. See [Alarm reset](ALARM-RESET.md).
 
 
 Build 0042 uses session-bound background jobs for backup export, upload inspection, restore and cleanup. A file-backed SQLite online snapshot feeds gzip and sequenced, individually authenticated AES-GCM blocks; upload uses checked 512 KiB slices and download uses 64 KiB raw frames through the native CGI/Unix-socket bridge. Inspection fully authenticates before activating a staging database. Final restore uses a single checked transaction on a separate connection, so job status/cancellation do not wait for the shared application mutex. Jobs have opaque random IDs, admin/session checks, private files, a one-worker gate, one-hour expiry and restart cleanup. The old bounded JSON archive API remains only for compatibility. See [Backup and restore](BACKUP-RESTORE.md).
@@ -146,7 +146,7 @@ polling/UI continue; socket failure closes/retries the set, ingestion-task failu
 requires restart. Saved and active binding states stay distinct. IPv6 sockets
 are IPv6-only. Informs/Reports/responses are excluded and no ACK is emitted.
 
-Schema 2 and logical archive format 7 preserve legacy Redfish data and convert
+Schema 2 and logical archive format 8 preserve Redfish/SNMP data and convert
 older supported archives. Restore advances the runtime epoch, invalidates queued
 work, pauses devices/traps/listener/channels and leaves acknowledgement requiring
 review. Failed restore preserves the prior committed policy. Imported receipts
@@ -170,3 +170,7 @@ seconds. Service readiness allows 120 seconds, requires an actual socket
 connection and is published after listener/shutdown-handler setup. DSM stopped
 and unknown status codes are 3 and 4 respectively. These paths are covered by
 native and static direct-upgrade regressions, separately from NAS acceptance.
+
+## Outgoing webhooks
+
+Outgoing webhooks provide a separate notification transport with per-target filtering, encrypted endpoint secrets, persistent per-event/target delivery jobs and independent workers. Alarm lifecycle cancellation applies to webhook-only selections as well as existing channels. Logical archive format 8 adds endpoint and delivery tables while retaining legacy readers. See [Outgoing webhooks](WEBHOOKS.md) for the format, security, retry and lifecycle contracts.

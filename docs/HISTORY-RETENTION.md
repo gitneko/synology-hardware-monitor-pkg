@@ -31,7 +31,7 @@ Hardware logs are separate from application events generated from them. Deleting
 
 ## Preserved state and storage
 
-Time-based cleanup preserves current hardware alarm states, acknowledgements and pending automatic email/desktop or queued manual email submissions. Old events with pending work remain until delivery is terminal or cancelled. This differs from explicitly clearing the event log, which cancels pending event deliveries.
+Time-based cleanup preserves current hardware alarm states, acknowledgements and pending automatic email, desktop or webhook jobs, or queued manual email submissions. Old events with pending work remain until delivery is terminal or cancelled. This differs from explicitly clearing the event log, which cancels pending event deliveries.
 
 The **audit log keeps the newest 10,000 entries**, irrespective of either age setting; the interface shows the most recent 50. The 10,000-entry cap is fixed, rather than a third age setting.
 

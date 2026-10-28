@@ -1,5 +1,5 @@
 package="HardwareMonitor"
-version="0.9.0-0065"
+version="0.10.0-0072"
 displayname="Hardware Monitor"
 description="Redfish and SNMP hardware monitoring with configurable trap reception, SMTP email, encrypted backup/restore, CSV export and independent DSM desktop notifications."
 maintainer="Hardware Monitor contributors"

@@ -13,8 +13,16 @@ test('automatic language resolution honors supported DSM language, then browser,
  assert.equal(resolveLanguage('en',{dsmLanguage:'ger',browserLanguage:'de'}),'en');
 });
 test('changing language updates status labels, event delivery descriptions and dates without rewriting vendor text',()=>{
- try{setLanguage('en');assert.equal(labels.critical,'Critical');assert.equal(labels.unknown,'Not fully assessable');assert.equal(dateLocale(),'en-GB');assert.equal(eventType({kind:'recovery',key:'ps1'}),'Hardware recovery');assert.match(deliveryText({desktop:{cancelled:true}}),/cancelled/);assert.equal(t('{0} Ereignisse exportiert.',5),'5 events exported.');assert.equal(t('Unmodified vendor text'),'Unmodified vendor text');}
+ try{setLanguage('en');assert.equal(labels.critical,'Critical');assert.equal(labels.unknown,'Not fully assessable');assert.equal(dateLocale(),'en-GB');assert.equal(eventType({kind:'recovery',key:'ps1'}),'Hardware recovery');assert.match(deliveryText({desktop:{cancelled:true}}),/cancelled/);assert.equal(t('{0} Ereignisse exportiert.',5),'5 events exported.');assert.equal(t('Unmodified vendor text'),'Unmodified vendor text');assert.equal(deliveryText({mail_reason:'device_disabled',desktop_reason:'device_disabled'}),'Notifications disabled for this device');}
  finally{setLanguage('de');}assert.equal(labels.critical,'Kritisch');
+});
+test('excluded webhook destinations use the selected UI language and retain separators',()=>{
+ try{setLanguage('en');assert.equal(deliveryText({mail_reason:'filtered',webhooks:[{name:'Slack',cancelled:true,error:'filtered'},{name:'Discord',cancelled:true,error:'filtered'}]}),'Email: excluded by event filters · Slack: excluded by event filters · Discord: excluded by event filters');}
+ finally{setLanguage('de');}
+});
+test('webhook device selection exclusions are translated separately from event filters',()=>{
+ try{setLanguage('en');assert.equal(deliveryText({webhooks:[{name:'Slack',cancelled:true,error:'device_filtered'}]}),'Stored locally · Slack: excluded by device selection');}
+ finally{setLanguage('de');}
 });
 test('all literal translation calls exist and preserve placeholder indices',()=>{
  const source=new URL('../src/',import.meta.url);for(const file of readdirSync(source).filter(n=>/\.(?:vue|js)$/.test(n)&&n!=='i18n.js')){

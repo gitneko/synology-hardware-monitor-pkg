@@ -273,6 +273,10 @@ fn link_occurrence(tx: &Transaction<'_>, event: i64, occurrence: &Occurrence) ->
             "UPDATE desktop_jobs SET cancelled=1 WHERE event_id=?1 AND delivered IS NULL",
             [event],
         )?;
+        tx.execute(
+            "UPDATE webhook_jobs SET cancelled=1 WHERE event_id=?1 AND delivered IS NULL",
+            [event],
+        )?;
         tx.execute("UPDATE events SET mail_reason='same_occurrence',desktop_reason='same_occurrence',message_context=json_set(message_context,'$.same_occurrence_as',?2) WHERE id=?1",params![event,id])?;
         break;
     }
@@ -571,7 +575,7 @@ pub(crate) fn prune_events(tx: &Transaction<'_>, now: i64, keep: i64) -> Result<
     )?;
     let excess = (count - keep).max(0);
     let rows: Vec<(i64, i64)> = {
-        let mut q=tx.prepare("SELECT e.id,e.created FROM events e WHERE e.kind='snmp_trap' AND NOT EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=e.id AND o.delivered IS NULL AND o.cancelled=0) AND NOT EXISTS(SELECT 1 FROM desktop_jobs j WHERE j.event_id=e.id AND j.delivered IS NULL AND j.cancelled=0 AND j.attempts<8) AND NOT EXISTS(SELECT 1 FROM mail_replay r WHERE r.event_id=e.id AND r.state IN ('preview','queued')) ORDER BY e.id LIMIT 10000")?;
+        let mut q=tx.prepare("SELECT e.id,e.created FROM events e WHERE e.kind='snmp_trap' AND NOT EXISTS(SELECT 1 FROM webhook_jobs w WHERE w.event_id=e.id AND w.delivered IS NULL AND w.cancelled=0 AND w.permanent=0) AND NOT EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=e.id AND o.delivered IS NULL AND o.cancelled=0) AND NOT EXISTS(SELECT 1 FROM desktop_jobs j WHERE j.event_id=e.id AND j.delivered IS NULL AND j.cancelled=0 AND j.attempts<8) AND NOT EXISTS(SELECT 1 FROM mail_replay r WHERE r.event_id=e.id AND r.state IN ('preview','queued')) ORDER BY e.id LIMIT 10000")?;
         let result = q
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;

@@ -1,7 +1,7 @@
 {
   "name": "hardware-monitor-ui",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.10.0",
   "type": "module",
   "scripts": {"dev":"vite --host 127.0.0.1", "build":"vite build", "test":"node --test tests/*.test.mjs"},
   "dependencies": {"vue":"^3.5.0"},

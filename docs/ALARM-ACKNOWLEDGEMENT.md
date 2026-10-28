@@ -1,6 +1,6 @@
 # Acknowledging known hardware faults
 
-Build 0.8.0-0028 adds administrator acknowledgement of current or retained hardware-state alarms. Open **Current & retained state alarms**, choose **Acknowledge …**, and enter a reason. The record applies to all users and suppresses automatic email and DSM desktop notifications for that incident. Acknowledged component and explained summary states appear blue; raw hardware health remains visible.
+Administrators can acknowledge current or retained hardware-state alarms. Open **Current & retained state alarms**, choose **Acknowledge …**, and enter a reason. The record applies to all users and suppresses automatic email, DSM desktop and webhook notifications for that incident. Acknowledged component and explained summary states appear blue; raw hardware health remains visible.
 
 Acknowledgement has no expiry while the same fault persists and survives daemon restarts, monitoring pauses and package upgrades. It is an operator decision inside Hardware Monitor; it does not change the controller, its logs or the server display's Ignore setting.
 
@@ -24,7 +24,7 @@ This is an assessment of known reported faults, not proof of complete physical c
 
 ## Delivery and history
 
-Pending jobs for acknowledged components and fully acknowledged explained summaries are cancelled in the same database transaction as the operator action. SMTP recipients already accepted remain recorded. An in-flight submission may finish before the operation completes; once it succeeds, no new matching submission starts through the standard SMTP/desktop worker. Already submitted email or DSM desktop notifications cannot be recalled. Local alarms and state events remain available; delivery reasons explain acknowledgement suppression separately from grouped summaries and event filters.
+Pending automatic email, desktop and webhook jobs for acknowledged components and fully acknowledged explained summaries are cancelled in the same database transaction as the operator action. SMTP recipients already accepted remain recorded. An in-flight submission may finish before the operation completes; once it succeeds, no new matching automatic submission starts. Already submitted email, DSM desktop or webhook notifications cannot be recalled. Local alarms and state events remain available; delivery reasons explain acknowledgement suppression separately from grouped summaries and event filters.
 
 New manufacturer hardware-log entries are independent and continue to follow the configured filters. Query, TLS, authentication and coverage alarms cannot be acknowledged through this feature. Hardware-log records currently have no reliable component association, so their text is not used to guess whether they describe an acknowledged incident.
 
@@ -34,11 +34,11 @@ Only DSM administrators can change acknowledgement, using the existing HTTPS/ori
 
 Acknowledgement records are keyed by device and canonical resource. Proven resource aliases can carry state forward; an already independent unacknowledged peer is not silently acknowledged. Retargeting or deleting a device removes its active records. Clearing event history preserves them.
 
-Acknowledgement metadata was added in logical app backup format 3 and remains included in the current format 7. Earlier formats are migrated; see [Backup and restore](BACKUP-RESTORE.md). Restore preserves imported reasons/attribution for review, resets acknowledgement and version tokens, pauses monitoring/delivery and cancels historical jobs. Administrators must deliberately acknowledge imported faults again. The local SQLite/master-key upgrade backup preserves active acknowledgements as ordinary database state.
+Acknowledgement metadata was added in logical app backup format 3 and remains included in the current format 8. Earlier formats are migrated; see [Backup and restore](BACKUP-RESTORE.md). Restore preserves imported reasons/attribution for review, resets acknowledgement and version tokens, pauses monitoring/delivery and cancels historical jobs. Administrators must deliberately acknowledge imported faults again. The local SQLite/master-key upgrade backup preserves active acknowledgements as ordinary database state.
 
 ## Verification boundary
 
-Automated local tests cover both queues, restart, recovery/reappearance, worsening, retained Unknown readings, mixed severities, independent summaries, condition/identity changes, version conflicts, reason bounds, permissions, aliases, retarget/delete, event clearing, archive migration/review/rollback and UI rendering. Local fake delivery acknowledgements prove queue decisions, not actual email receipt or DSM display. Acceptance on a NAS with a real faulty fan-sensor input remains required.
+Automated local tests cover automatic email/desktop queues and webhook lifecycle cancellation, restart, recovery/reappearance, worsening, retained Unknown readings, mixed severities, independent summaries, condition/identity changes, version conflicts, reason bounds, permissions, aliases, retarget/delete, event clearing, archive migration/review/rollback and UI rendering. Local fake delivery acknowledgements prove queue decisions, not actual email receipt or DSM display. Acceptance on a NAS with a real faulty fan-sensor input remains required.
 
 ## Upgrade from build 0028
 

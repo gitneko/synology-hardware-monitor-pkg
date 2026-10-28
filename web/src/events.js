@@ -1,4 +1,5 @@
 import {t,dateLocale} from './i18n.js';
+import {webhookDeliveryText} from './webhooks.js';
 export function eventCategory(event) {
   if(event.kind==='snmp_trap')return 'trap';
   if(event.kind==='hardware_log')return 'log';
@@ -28,7 +29,8 @@ export function emailDeliveryText(event) {
     if(event.delivery_error)return t("Erneuter Versuch vorgemerkt · {0} angenommen",progress);
     return t("E-Mail vorgemerkt · {0} angenommen",progress);
   }
-  const reason={device_disabled:t("am Gerät deaktiviert"),monitoring_disabled:t("Überwachung deaktiviert"),filtered:t("durch Ereignisauswahl ausgeschlossen"),mail_disabled:t("automatischer Versand deaktiviert"),mail_not_configured:t("SMTP nicht eingerichtet")}[event.mail_reason];
+  if(event.mail_reason==='device_disabled')return t('Benachrichtigungen für dieses Gerät deaktiviert');
+  const reason={monitoring_disabled:t("Überwachung deaktiviert"),filtered:t("durch Ereignisauswahl ausgeschlossen"),mail_disabled:t("automatischer Versand deaktiviert"),mail_not_configured:t("SMTP nicht eingerichtet")}[event.mail_reason];
   if(reason)return t("E-Mail: {0}",reason);
   if(event.delivered)return t("An DSM übergeben");
   if(event.cancelled)return t("Vormerkung storniert");
@@ -36,6 +38,9 @@ export function emailDeliveryText(event) {
   return t("Lokal gespeichert");
 }
 export function deliveryText(event) {
+  return [channelDeliveryText(event),webhookDeliveryText(event)].filter(Boolean).join(' · ');
+}
+function channelDeliveryText(event) {
   const email=emailDeliveryText(event),desktop=event.desktop;
   if(event.desktop_reason==='log_reading_disabled')return t('{0} · DSM-Desktop: Log-Abfrage deaktiviert',email);
   if(event.desktop_reason==='query_superseded')return t('{0} · DSM-Desktop: durch aktuelle Log-Abfrage ersetzt',email);

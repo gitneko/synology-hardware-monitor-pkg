@@ -1,6 +1,18 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {eventType,eventCategory,deliveryText,filterEvents,sourceTimestamp,capabilityText,groupEvents} from '../src/events.js';
 const events=[{device:'a',kind:'alarm',key:'power',health:'critical'},{device:'a',kind:'hardware_log',key:'log:hash',health:'warning'},{device:'b',kind:'recovery',key:'coverage:/Logs',health:'ok'}];
+test('webhook device exclusions remain visible alongside event exclusions and accepted deliveries',()=>{
+ const excluded={cancelled:true,error:'device_filtered',attempts:0};
+ assert.equal(deliveryText({webhooks:[{name:'Slack',...excluded},{name:'Discord',...excluded}]}),'Lokal gespeichert · Slack: durch Geräteauswahl ausgeschlossen · Discord: durch Geräteauswahl ausgeschlossen');
+ assert.equal(deliveryText({webhooks:[{name:'Slack',...excluded},{name:'Discord',cancelled:true,error:'filtered'},{name:'Custom',delivered:123}]}),'Lokal gespeichert · Slack: durch Geräteauswahl ausgeschlossen · Discord: durch Ereignisauswahl ausgeschlossen · Custom: Vom Empfänger angenommen');
+});
+test('delivery text separates email, desktop and each webhook, including all excluded targets',()=>{
+ const excluded={cancelled:true,error:'filtered',attempts:0};
+ const webhooks=[{name:'Discord',...excluded},{name:'Slack',...excluded}];
+ assert.equal(deliveryText({webhooks}),'Lokal gespeichert · Discord: durch Ereignisauswahl ausgeschlossen · Slack: durch Ereignisauswahl ausgeschlossen');
+ assert.equal(deliveryText({mail_reason:'filtered',desktop_reason:'filtered',webhooks:[{name:'Discord',delivered:123},{name:'Slack',...excluded}]}),'E-Mail: durch Ereignisauswahl ausgeschlossen · DSM-Desktop: durch Ereignisauswahl ausgeschlossen · Discord: Vom Empfänger angenommen · Slack: durch Ereignisauswahl ausgeschlossen');
+ assert.equal(deliveryText({webhooks:[]}),'Lokal gespeichert');
+});
 test('retired log diagnostics explain cancellation and preserve submitted progress',()=>{
  for(const reason of ['log_reading_disabled','query_superseded']){
   const text=deliveryText({mail_reason:reason,desktop_reason:reason,submitted_recipients:1,transport:'smtp',cancelled:true});

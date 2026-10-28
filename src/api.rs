@@ -60,6 +60,23 @@ pub enum Operation {
     NotificationSave {
         settings: crate::notification::Input,
     },
+    WebhookSave {
+        webhook: crate::webhook::Input,
+    },
+    WebhookPreview {
+        webhook: crate::webhook::Input,
+    },
+    WebhookTest {
+        webhook: crate::webhook::Input,
+    },
+    WebhookRevealUrl {
+        id: String,
+        revision: i64,
+    },
+    WebhookDelete {
+        id: String,
+        revision: i64,
+    },
     MailSave {
         mail: crate::mail::Input,
     },
@@ -232,6 +249,7 @@ pub struct Api {
     pub(crate) snmp_receiver: Option<Arc<crate::snmp::receiver::Controller>>,
     probes: tokio::sync::Semaphore,
     pub(crate) mail_gate: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) webhook_gate: Arc<tokio::sync::RwLock<()>>,
     pub jobs: Arc<crate::jobs::Manager>,
     archives: tokio::sync::Semaphore,
     replay_turn: std::sync::atomic::AtomicBool,
@@ -258,6 +276,7 @@ impl Api {
             archives: tokio::sync::Semaphore::new(1),
             replay_turn: std::sync::atomic::AtomicBool::new(true),
             mail_gate: Arc::new(tokio::sync::Mutex::new(())),
+            webhook_gate: Arc::new(tokio::sync::RwLock::new(())),
         }
     }
     pub fn submission_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
@@ -401,8 +420,14 @@ impl Api {
             if policy_revision == 0 {
                 policy.language = request.locale;
             }
-            data["notifications"] = json!({"automatic_delivery":store.mail_enabled()||policy.desktop_enabled,"mail_enabled":store.mail_enabled(),"desktop_enabled":policy.desktop_enabled,"desktop_self_test_available":!local && dsm::desktop_test_available()});
+            let webhook_enabled: i64 = store.0.query_row(
+                "SELECT COUNT(*) FROM webhook_endpoints WHERE json_extract(config,'$.enabled')=1",
+                [],
+                |r| r.get(0),
+            )?;
+            data["notifications"] = json!({"automatic_delivery":store.mail_enabled()||policy.desktop_enabled||webhook_enabled>0,"webhook_enabled":webhook_enabled,"mail_enabled":store.mail_enabled(),"desktop_enabled":policy.desktop_enabled,"desktop_self_test_available":!local && dsm::desktop_test_available()});
             if role == Role::Administrator {
+                data["webhooks"] = json!(store.webhook_views(&self.vault)?);
                 data["jobs"] = json!(self.jobs.list(&binding(actor, &request.auth)));
                 data["notification_settings"] =
                     json!({"settings":policy,"revision":policy_revision});
@@ -492,6 +517,7 @@ impl Api {
         } else {
             self.mail_gate.lock().await
         };
+        let _webhook_guard = self.webhook_gate.write().await;
         match &request.operation {
             Operation::SnmpReceipts { device, limit } => Ok(
                 json!({"ok":true,"receipts":self.store.lock().unwrap().snmp_receipts(device.as_deref(),*limit)?}),
@@ -718,6 +744,76 @@ impl Api {
                         json!({"ok":true,"summary":archive.summary(),"expected_audit":store.audit_cursor()?}),
                     )
                 }
+            }
+            Operation::WebhookSave { webhook } => {
+                let mut store = self.store.lock().unwrap();
+                let endpoint = store.prepare_webhook(webhook, &self.vault)?;
+                store.save_webhook(&endpoint, &self.vault, actor)?;
+                Ok(json!({"ok":true,"id":endpoint.id,"revision":endpoint.revision+1}))
+            }
+            Operation::WebhookRevealUrl { id, revision } => {
+                let endpoint = self
+                    .store
+                    .lock()
+                    .unwrap()
+                    .webhook_endpoint(id, &self.vault)?
+                    .context(BoundaryError("webhook_conflict"))?;
+                anyhow::ensure!(
+                    endpoint.revision == *revision,
+                    BoundaryError("webhook_conflict")
+                );
+                Ok(json!({"ok":true,"url":endpoint.secrets.url}))
+            }
+            Operation::WebhookDelete { id, revision } => {
+                self.store
+                    .lock()
+                    .unwrap()
+                    .delete_webhook(id, *revision, actor)?;
+                Ok(json!({"ok":true}))
+            }
+            Operation::WebhookPreview { webhook } => {
+                let endpoint = self
+                    .store
+                    .lock()
+                    .unwrap()
+                    .prepare_webhook(webhook, &self.vault)?;
+                let settings = endpoint.settings.hydrate(&endpoint.secrets)?;
+                let preview = crate::webhook::render(
+                    &settings,
+                    &crate::webhook::Event::sample_for(settings.language),
+                    "sample",
+                    true,
+                )?;
+                Ok(
+                    json!({"ok":true,"preview":{"content_type":preview.content_type,"body":String::from_utf8(preview.body)?,"fields":preview.fields}}),
+                )
+            }
+            Operation::WebhookTest { webhook } => {
+                let (endpoint, audit) = {
+                    let store = self.store.lock().unwrap();
+                    (
+                        store.prepare_webhook(webhook, &self.vault)?,
+                        store.reserve_webhook_test(actor, crate::now())?,
+                    )
+                };
+                let outcome = crate::webhook::submit(
+                    &endpoint,
+                    &crate::webhook::Event::sample_for(endpoint.settings.language),
+                    &crate::webhook::new_id(),
+                )
+                .await;
+                self.store.lock().unwrap().0.execute(
+                    "UPDATE audit_log SET outcome=?2 WHERE id=?1",
+                    rusqlite::params![audit, outcome.code.unwrap_or("accepted")],
+                )?;
+                if let Some(code) = outcome.code {
+                    return Ok(
+                        json!({"ok":false,"code":code,"http_status":outcome.status,"error":format!("{}{}",crate::i18n::text(message(code),request.locale),outcome.status.map(|s|format!(" (HTTP {s})")).unwrap_or_default())}),
+                    );
+                }
+                Ok(
+                    json!({"ok":true,"http_status":outcome.status,"message":"Testnachricht vom Webhook-Empfänger angenommen."}),
+                )
             }
             Operation::NotificationSave { settings } => {
                 self.store
@@ -965,6 +1061,28 @@ impl Api {
                 .unwrap()
                 .delivery(id, success, crate::now())?;
         }
+        Ok(())
+    }
+
+    pub async fn deliver_one_webhook(&self) -> Result<()> {
+        let _guard = self.webhook_gate.read().await;
+        if self.jobs.restoring() {
+            return Ok(());
+        }
+        let job = self
+            .store
+            .lock()
+            .unwrap()
+            .claim_webhook(&self.vault, crate::now())?;
+        let Some(job) = job else { return Ok(()) };
+        if !self.store.lock().unwrap().webhook_current(&job)? {
+            return Ok(());
+        }
+        let outcome = crate::webhook::submit(&job.endpoint, &job.event, &job.id).await;
+        self.store
+            .lock()
+            .unwrap()
+            .finish_webhook(&job, &outcome, crate::now())?;
         Ok(())
     }
 
@@ -1289,6 +1407,19 @@ pub fn message(code: &str) -> &'static str {
         "maintenance_confirmation_required"=>"Bitte die Aktion ausdrücklich bestätigen.",
         "history_filter_invalid"=>"Die Ereignisauswahl ist ungültig.",
         "history_too_large"=>"Der Export überschreitet das derzeitige Limit von 50.000 gespeicherten Ereignissen oder 16 MiB CSV.",
+        "webhook_config_invalid"=>"Webhook-Einstellungen prüfen: gültige HTTP-/HTTPS-Adresse, Felder, Header und Zugangsdaten erforderlich.",
+        "webhook_discord_invalid"=>"Discord-Angaben prüfen: gültige Avatar-URL, Embed-Objekte, Feldtypen und Discord-Längenbegrenzungen sind erforderlich.",
+        "webhook_template_invalid"=>"Die Webhook-Vorlage enthält ungültiges JSON oder unbekannte beziehungsweise unvollständige Platzhalter.",
+        "webhook_body_large"=>"Die Webhook-Nachricht überschreitet 64 KiB.",
+        "webhook_secret_required"=>"Webhook-Adresse oder geheime Werte erforderlich. Nach einer Änderung von Adresse oder Anmeldung geheime Werte erneut eingeben.",
+        "webhook_conflict"=>"Das Webhook-Ziel wurde geändert oder gelöscht. Bitte gespeicherte Angaben neu laden.",
+        "webhook_limit"=>"Es können höchstens 16 Webhook-Ziele eingerichtet werden.",
+        "webhook_test_rate_limited"=>"Bitte mindestens 30 Sekunden bis zum nächsten Webhook-Test warten.",
+        "webhook_network_blocked"=>"Webhook-Netzwerkziel gesperrt. Private oder lokale Ziele ausdrücklich freigeben; Link-Local- und Metadatenadressen bleiben gesperrt.",
+        "webhook_connection_failed"=>"Webhook-Verbindung fehlgeschlagen. Adresse, Netzwerk und TLS-Zertifikat prüfen.",
+        "webhook_timeout"=>"Keine rechtzeitige Webhook-Bestätigung. Die Nachricht könnte bereits angenommen worden sein.",
+        "webhook_http_error"=>"Der Webhook-Empfänger hat die Testnachricht abgewiesen.",
+        "webhook_response_large"=>"Die Antwort des Webhook-Empfängers überschreitet 64 KiB.",
         "notification_conflict"=>"Benachrichtigungseinstellungen wurden geändert. Bitte neu laden.",
         "mail_time_invalid"=>"Zeitzone oder Zeitformat ist ungültig. Bitte eine IANA-Zone und gültige %-Formatzeichen verwenden.",
         "mail_busy"=>"Es läuft bereits ein E-Mail-Versand. Bitte in einigen Sekunden erneut versuchen.",
@@ -1884,6 +2015,140 @@ mod tests {
             csrf,
         }
     }
+    #[tokio::test]
+    async fn webhook_operations_require_admin_csrf_revision_and_redact_all_secrets() {
+        let (_dir, api) = instance();
+        fn input() -> crate::webhook::Input {
+            serde_json::from_value(json!({"id":null,"revision":0,"settings":{"name":"API synthetic","format":"form","fields":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"token","value":"synthetic-api-field-marker","secret":true}]},"url":"http://127.0.0.1/synthetic-api-url-marker","credential":null})).unwrap()
+        }
+        let mut req = request(&api, Operation::WebhookSave { webhook: input() });
+        assert!(api.authorized(&req, "viewer", Role::Viewer).await.is_err());
+        req.csrf = None;
+        assert!(api
+            .authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        req.csrf = request(&api, Operation::Dashboard).csrf;
+        let saved = api
+            .authorized(&req, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert!(saved["id"].is_string());
+        let view = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        let text = view.to_string();
+        assert!(
+            !text.contains("synthetic-api-field-marker")
+                && !text.contains("synthetic-api-url-marker")
+        );
+        let mut reveal = request(
+            &api,
+            Operation::WebhookRevealUrl {
+                id: saved["id"].as_str().unwrap().into(),
+                revision: 1,
+            },
+        );
+        assert!(api
+            .authorized(&reveal, "viewer", Role::Viewer)
+            .await
+            .is_err());
+        reveal.csrf = None;
+        assert!(api
+            .authorized(&reveal, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        reveal.csrf = request(&api, Operation::Dashboard).csrf;
+        let revealed = api
+            .authorized(&reveal, "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+        assert_eq!(revealed["url"], "http://127.0.0.1/synthetic-api-url-marker");
+        assert!(!revealed.to_string().contains("synthetic-api-field-marker"));
+        let stale = request(
+            &api,
+            Operation::WebhookRevealUrl {
+                id: saved["id"].as_str().unwrap().into(),
+                revision: 0,
+            },
+        );
+        assert!(api
+            .authorized(&stale, "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        let view = api
+            .authorized(
+                &request(&api, Operation::Dashboard),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        assert!(!view.to_string().contains("synthetic-api-url-marker"));
+        let preview = api
+            .authorized(
+                &request(&api, Operation::WebhookPreview { webhook: input() }),
+                "admin-test",
+                Role::Administrator,
+            )
+            .await
+            .unwrap();
+        assert!(!preview.to_string().contains("synthetic-api-field-marker"));
+        let delete = Operation::WebhookDelete {
+            id: saved["id"].as_str().unwrap().into(),
+            revision: 0,
+        };
+        assert!(api
+            .authorized(&request(&api, delete), "admin-test", Role::Administrator)
+            .await
+            .is_err());
+        let delete = Operation::WebhookDelete {
+            id: saved["id"].as_str().unwrap().into(),
+            revision: 1,
+        };
+        api.authorized(&request(&api, delete), "admin-test", Role::Administrator)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn webhook_preview_uses_destination_language_independent_of_interface_locale() {
+        let (_dir, api) = instance();
+        for (language, locale, device, message) in [
+            (
+                "en",
+                crate::i18n::Language::De,
+                "Sample server",
+                "Sample server: Fan failed",
+            ),
+            (
+                "de",
+                crate::i18n::Language::En,
+                "Beispielserver",
+                "Beispielserver: Lüfter ausgefallen",
+            ),
+        ] {
+            let webhook=serde_json::from_value(json!({"id":null,"revision":0,"settings":{"name":"Language target","format":"generic","language":language},"url":"https://example.invalid/webhook","credential":null})).unwrap();
+            let mut req = request(&api, Operation::WebhookPreview { webhook });
+            req.locale = locale;
+            let preview = api
+                .authorized(&req, "admin-test", Role::Administrator)
+                .await
+                .unwrap();
+            let body: Value =
+                serde_json::from_str(preview["preview"]["body"].as_str().unwrap()).unwrap();
+            assert_eq!(body["device"], device);
+            assert_eq!(body["message"], message);
+            assert_eq!(body["schema_version"], 1);
+            assert_eq!(body["health"], "critical");
+        }
+    }
+
     #[test]
     fn backup_size_errors_localize_only_safe_numeric_and_schema_details() {
         let (_dir, api) = instance();

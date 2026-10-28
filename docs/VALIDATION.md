@@ -1,6 +1,6 @@
 # Validation and evidence boundaries
 
-Current package: **0.9.0-0065**. Local source/reference/package checks,
+Current version: **0.10.0**. Local source/reference/package checks,
 authorized live read-only collector runs and user-reported NAS acceptance are
 separate evidence. The [compatibility matrix](HARDWARE-COMPATIBILITY.md) records
 actual combinations; [SNMP](SNMP.md) describes operation and limitations.
@@ -47,6 +47,30 @@ unreported security variants, long-running load and full DSM role integration
 remain additional coverage, not a reopening of those accepted checks. See
 [NAS acceptance](NAS-ACCEPTANCE.md) and [Roadmap](ROADMAP.md).
 
+## Outgoing webhooks (0.10.0)
+
+On 28 October 2026 the user confirmed functional testing of the outgoing webhook implementation.
+
+Final implementation validation on 28 October 2026 passed:
+
+| Check | Result / coverage |
+|---|---|
+| Rust | 265 library, 3 executable and 10 configuration integration tests; 2 existing opt-in tests ignored |
+| Frontend | 88 tests; localized status text, selection exclusions, settings/templates, readable format names and separators |
+| Python tooling | 31 packaging/release tests |
+| Source quality | Formatting, Clippy with warnings denied and maintained documentation links |
+| Local HTTP/HTTPS | Actual daemon delivery from a synthetic Redfish fault, text/JSON/form/multipart encodings, repeated fields, authentication, redaction, CA/hostname validation, independent workers, 429 retry IDs, terminal 401 and redirect refusal |
+| Templates and chat payloads | Typed placeholders, bounded single-pass expansion, custom Discord/Slack text, Discord embed validation, sender/avatar fields and Slack identity isolation |
+| Languages and URL access | German/English preview and test samples, automatic English delivery, preserved device/vendor text, administrator/CSRF/revision-checked saved URL reveal |
+| History and lifecycle | Event/device-selection exclusions with zero attempts and no requests, all-excluded and mixed selections, no backfill, acknowledgement/reset/delete, retry/age limits and CSV status export |
+| Persistence | Exclusions survive settings changes, deletion, restart and logical restore; encrypted logical/streaming archive rekeying and legacy format conversion |
+| Package | Production frontend and static musl runtime, SPK structure and native lifecycle checks |
+| Secret audit | No real secrets; public reference vectors and vendor file digests classified separately |
+
+Isolated browser checks additionally covered destination creation, save/reopen, multipart preview, saved URL visibility and editor spacing. These checks used disposable local state; they do not establish a complete native DSM appearance matrix. The implementation artifacts retain detailed logs, checksums and validation reports. This documentation consolidation reruns documentation/link and whitespace checks; the source/test counts above describe the completed implementation validation.
+
+The maintained [webhook guide](WEBHOOKS.md) defines the release contract. Current behavior includes visible per-target event/device exclusions, fixed at event time, and the device-wide notification wording. Exclusions create no pending work and are not reconstructed for older events. Additional deployment coverage is tracked in [NAS acceptance](NAS-ACCEPTANCE.md#additional-coverage-not-a-reopening-of-accepted-checks).
+
 ## Local regression coverage
 
 Independent Net-SNMP agents/traps plus controlled loopback HTTPS/SMTP exercise
@@ -62,6 +86,7 @@ The aggregate wrapper runs the following native and static executable suites:
 | UPS | Three profiles × v1/v2c/v3-SHA1/v3-SHA256; typed states/units, sparse alarms/phases, double-count proof, new-condition acknowledgement, partial retention and recovery |
 | Load | Default package build: two 60-second receiver/alarm scenarios, invalid/unknown/spoofed-eligible bursts, continuing polls/API and local SMTP; explicit skip mode is recorded |
 | Patched library | Five unit tests and 20 independent reference cases: multi-engine/shared-user routing, wire crypto/security, long silence, injected clocks, monotonic seeding, malformed corpus, cancellation and v1 conversion |
+| Webhook transport | HTTP/HTTPS, encodings, per-target selection/language, independent delivery, retry/status history and archive rekeying; detailed evidence above |
 | Persistence / UI | Schema migration, separate secrets, restore gates/epochs, history/CSV, configuration round trips, bilingual/placeholder parity, viewer controls and text escaping |
 
 These are bounded reference/corpus tests, not exhaustive fuzzing, maximum NAS

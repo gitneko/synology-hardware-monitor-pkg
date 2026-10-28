@@ -1,4 +1,4 @@
-# Streaming archive format (build 0042)
+# Streaming archive format
 
 This documents the binary `HWMON-STREAM-1` envelope for future compatible readers. User instructions and resource requirements are in [Backup and restore](BACKUP-RESTORE.md). Existing Base64/JSON envelopes remain a separate legacy reader.
 
@@ -23,10 +23,10 @@ The mandatory final frame detects truncation even at an otherwise valid gzip/rec
 
 A single gzip member contains UTF-8 newline-delimited JSON records:
 
-1. `header` with `metadata` (`format`, `version`, `created`). Logical format is **7**, combining retention and SNMP tables; format 6 streams remain readable with default SNMP settings.
+1. `header` with `metadata` (`format`, `version`, `created`). Logical format is **8**, adding webhook endpoint and job tables to retention and SNMP tables. Format 6 and 7 streams remain readable with safe defaults for missing structures.
 2. For every compiled table in `archive::table_specs()`, a `table` record with `name`, followed by zero or more `row` records with `cells` in that table's compiled column order.
 3. `end` with the exact total row count. No trailing logical records or compressed bytes are permitted.
 
-Cells use the existing tagged representation: `Null`, `Integer`, `Text` or Base64 `Blob`. No SQL, table/column names or filesystem paths from the file are executed or trusted. Each JSON record is limited to 16 MiB plus its LF. Layout, column count, integer bounds and foreign keys are checked while staging. Device/SMTP/purpose-separated SNMP credentials are re-encrypted with the destination vault before entering the staging database.
+Cells use the existing tagged representation: `Null`, `Integer`, `Text` or Base64 `Blob`. No SQL, table/column names or filesystem paths from the file are executed or trusted. Each JSON record is limited to 16 MiB plus its LF. Layout, column count, integer bounds and foreign keys are checked while staging. Device/SMTP/purpose-separated SNMP and webhook credentials are re-encrypted with the destination vault before entering the staging database.
 
 The entire stream, including gzip termination, row count, final authenticated frame and physical EOF, must pass before a staged import is confirmable. Final application-record validation and replacement occur in one live SQLite transaction with cancellation and an audit-revision guard. The previous database survives failure; a completed commit is success. Restore resets operational revisions and the daily-cleanup review deadline, pauses devices/channels, and cancels imported pending deliveries.

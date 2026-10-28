@@ -453,6 +453,7 @@ pub(crate) fn suppress(
         }
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2 AND mail_reason='acknowledged')",params![device,key])?;
         tx.execute("UPDATE desktop_jobs SET cancelled=1 WHERE delivered IS NULL AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2 AND desktop_reason='acknowledged')",params![device,key])?;
+        tx.execute("UPDATE webhook_jobs SET cancelled=1,error='acknowledged' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2 AND kind!='hardware_log' AND ((id>?3 AND (?4 OR kind='recovery')) OR ?4))",params![device,key,boundary,active])?;
     }
     Ok(())
 }
@@ -515,6 +516,7 @@ impl Store {
                 params![id, key],
             )?;
         }
+        tx.execute("UPDATE webhook_jobs SET cancelled=1,error='reset' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1 AND (key=?2 OR canonical_key=?2) AND kind!='hardware_log')",params![id,key])?;
         // End only the current trap-derived evidence for this incident. Keeping
         // it active would reapply an old provisional fault on an unknown poll.
         // Receipt/event history is retained; reset is not a recovery signal.

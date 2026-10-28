@@ -46,3 +46,16 @@
 .snmp-reception{font-size:12px;line-height:1.6;overflow-wrap:anywhere}.snmp-reception strong,.snmp-reception-time,.snmp-reception small{display:block}.snmp-reception small{margin-top:6px}.snmp-reception-compact.notice{margin:0;padding:10px 12px;min-width:230px}.detail-reception{margin:0 22px 20px}.snmp-reception-time{font-variant-numeric:tabular-nums}
 
 .events .event-retention-note{margin:0;padding:0 22px 14px}.device-editor .sender-probe-action{margin-bottom:20px}
+
+.webhook-target{display:flex;justify-content:space-between;gap:16px;padding:16px 0;border-bottom:1px solid var(--line,#dce3eb)}
+.webhook-field{display:grid;grid-template-columns:1fr 2fr;gap:10px;padding:14px;margin:12px 0;background:#f4f7fa;border-radius:8px}.webhook-field .check{align-self:center}.webhook-field button{justify-self:start}.webhook-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;padding:16px;background:#f4f7fa}.webhook-settings code{overflow-wrap:anywhere}.webhook-settings .actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}@media(max-width:700px){.webhook-field{grid-template-columns:1fr}.webhook-target{flex-direction:column}}
+
+.webhook-settings{width:100%;max-height:none;box-shadow:none}
+
+.webhook-settings>.notice,.webhook-settings>.error{margin:20px 0 0}
+
+.webhook-settings .webhook-ca{margin-top:20px}.webhook-settings .webhook-url-label{margin-bottom:7px}.webhook-url-row{display:flex;align-items:stretch;gap:10px;margin-bottom:17px}.webhook-url-row input{flex:1}
+
+.webhook-settings .webhook-embeds{margin-top:20px}
+
+.webhook-settings>.webhook-target+form{margin-top:20px}

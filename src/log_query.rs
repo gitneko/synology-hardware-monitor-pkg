@@ -25,6 +25,7 @@ fn retire(conn: &Connection, device: &str, key: &str, reason: &str) -> Result<()
             params![device, key, reason],
         )?;
     }
+    conn.execute("UPDATE webhook_jobs SET cancelled=1,error=?3 WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1 AND key=?2 AND kind!='hardware_log')",params![device,key,reason])?;
     // alarm_control follows via its existing foreign-key cascade.
     conn.execute(
         "DELETE FROM alarm_state WHERE device=?1 AND key=?2",
@@ -47,7 +48,7 @@ pub(crate) fn disabled(conn: &Connection, d: &Device) -> Result<()> {
     let mut snapshot: Option<Snapshot> =
         raw.as_ref().map(|s| serde_json::from_str(s)).transpose()?;
     let mut keys = {
-        let mut q = conn.prepare("SELECT key FROM alarm_state WHERE device=?1 UNION SELECT key FROM events WHERE device=?1 AND (id IN (SELECT event_id FROM outbox WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM desktop_jobs WHERE delivered IS NULL AND cancelled=0))")?;
+        let mut q = conn.prepare("SELECT key FROM alarm_state WHERE device=?1 UNION SELECT key FROM events WHERE device=?1 AND (id IN (SELECT event_id FROM outbox WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM desktop_jobs WHERE delivered IS NULL AND cancelled=0) OR id IN (SELECT event_id FROM webhook_jobs WHERE delivered IS NULL AND cancelled=0 AND permanent=0))")?;
         let rows = q
             .query_map([&d.id], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<BTreeSet<_>>>()?;
@@ -92,6 +93,7 @@ pub(crate) fn disabled(conn: &Connection, d: &Device) -> Result<()> {
                     [&d.id],
                 )?;
             }
+            conn.execute("UPDATE webhook_jobs SET cancelled=1,error='log_reading_disabled' WHERE delivered IS NULL AND permanent=0 AND cancelled=0 AND event_id IN (SELECT id FROM events WHERE device=?1 AND key='collector' AND health='\"warning\"' AND json_extract(message_context,'$.label')='Management-Abfrage unvollständig')",[&d.id])?;
         }
         snapshot
             .assessment_exclusions

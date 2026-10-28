@@ -111,7 +111,7 @@ The bootstrap downloads musl **1.2.5**, verifies its pinned SHA-256 and builds i
 
 Output in `dist/current/`:
 
-- `HardwareMonitor-0.9.0-0065-x86_64-dsm7-development.spk`: one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
+- `HardwareMonitor-<version>-x86_64-dsm7-development.spk` (version from `packaging/INFO.dsm7`): one DSM 7 package for both Intel geminilake and AMD v1000 platforms.
 - `latest-assets/`: fixed-name copies `HardwareMonitor-dsm7-x86_64.spk`, `build-manifest.json` and `SHA256SUMS`, ready for release upload.
 
 The JSON manifest records the source base commit (when available), dirty state/source content hash, package hashes, version, archive timestamp and aggregate static SNMP evidence/binary hash. Dirty local builds are reviewable but the publisher rejects them before any GitHub operation. Sources must remain stable throughout a build; if generated notices change, review them and rebuild. `snmp-reference*.json` outside `latest-assets` retains the detailed local reports. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
@@ -120,7 +120,8 @@ The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py
 
 ```sh
 python3 tools/build_spk.py --profile dsm7 --arch x86_64 --binary target/x86_64-unknown-linux-musl/release/hardware-monitor
-python3 tools/check_spk.py dist/HardwareMonitor-0.9.0-0065-x86_64-dsm7-development.spk
+package_version=$(sed -n 's/^version="\(.*\)"/\1/p' packaging/INFO.dsm7)
+python3 tools/check_spk.py "dist/HardwareMonitor-${package_version}-x86_64-dsm7-development.spk"
 ```
 
 Do not package a binary dynamically linked against the development host's glibc. The assembler rejects dynamic/wrong-CPU executables. Never enable `target-cpu=native` or platform-specific CPU flags for this shared package. The musl compiler and bundled C code use the same baseline. Runtime CPU detection in dependencies is distinct from requiring a newer CPU at startup. See [Architecture family decision](PACKAGE-ARCHITECTURES.md).
@@ -224,3 +225,10 @@ reference coverage, then record real hardware evidence separately.
 anchors. CI and package generation run it; SPK inspection checks the packaged
 README/docs set too. The SPK must include the maintained SNMP guide and source
 records, and exclude temporary planning/result reports and reference tooling.
+
+Outgoing webhook integration (isolated HTTP/HTTPS recipients, no real destinations):
+
+```sh
+cargo build --locked --features local-dev
+python3 tools/webhook_integration_test.py target/debug/hardware-monitor
+```

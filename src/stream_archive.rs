@@ -374,8 +374,17 @@ pub fn export(
                     _ => anyhow::bail!("unsupported cell"),
                 });
             }
-            if *table == "devices" || *table == "mail_settings" || *table == "protocol_secrets" {
-                let id = if *table == "devices" {
+            if *table == "devices"
+                || *table == "mail_settings"
+                || *table == "protocol_secrets"
+                || *table == "webhook_endpoints"
+            {
+                let id = if *table == "webhook_endpoints" {
+                    let Cell::Text(id) = &cells[0] else {
+                        anyhow::bail!("webhook ID")
+                    };
+                    crate::webhook::aad(id)
+                } else if *table == "devices" {
                     match &cells[0] {
                         Cell::Text(s) => s.clone(),
                         _ => anyhow::bail!("device id"),
@@ -496,7 +505,7 @@ pub fn inspect(
         anyhow::bail!("archive metadata")
     };
     anyhow::ensure!(
-        matches!(metadata.format, 6 | FORMAT)
+        matches!(metadata.format, 6 | 7 | FORMAT)
             && metadata.version.len() <= 80
             && metadata.created >= 0,
         "archive version"
@@ -506,6 +515,10 @@ pub fn inspect(
     let mut marker = read_record(&mut reader)?.context("archive table marker")?;
     let tables: Vec<_> = if metadata.format == 6 {
         TABLES.iter().collect()
+    } else if metadata.format == 7 {
+        table_specs()
+            .filter(|(name, _)| !name.starts_with("webhook_"))
+            .collect()
     } else {
         table_specs().collect()
     };
@@ -534,8 +547,17 @@ pub fn inspect(
                     .all(|v| !matches!(v,Value::Integer(n) if *n<0 || *n>i64::MAX/4)),
                 "archive integer"
             );
-            if table == "devices" || table == "mail_settings" || table == "protocol_secrets" {
-                let id = if table == "devices" {
+            if table == "devices"
+                || table == "mail_settings"
+                || table == "protocol_secrets"
+                || table == "webhook_endpoints"
+            {
+                let id = if table == "webhook_endpoints" {
+                    let Value::Text(id) = &values[0] else {
+                        anyhow::bail!("webhook ID")
+                    };
+                    crate::webhook::aad(id)
+                } else if table == "devices" {
                     match &values[0] {
                         Value::Text(s) => s.clone(),
                         _ => anyhow::bail!("device id"),
@@ -549,7 +571,15 @@ pub fn inspect(
                     "settings:smtp".into()
                 };
                 if let Value::Blob(secret) = &mut values[2] {
-                    anyhow::ensure!(secret.len() <= 4096, "archive credential size");
+                    anyhow::ensure!(
+                        secret.len()
+                            <= if table == "webhook_endpoints" {
+                                1024 * 1024
+                            } else {
+                                4096
+                            },
+                        "archive credential size"
+                    );
                     if !secret.is_empty() {
                         let sealed = vault.seal(&id, secret)?;
                         secret.zeroize();

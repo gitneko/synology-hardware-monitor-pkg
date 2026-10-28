@@ -378,6 +378,7 @@ async fn serve(
     let mut running = HashSet::new();
     let mut jobs = JoinSet::new();
     let mut delivery = JoinSet::new();
+    let mut webhooks = JoinSet::new();
     let mut next_delivery = Instant::now();
     worker_api.jobs.reap()?;
     let mut next_reap = Instant::now() + Duration::from_secs(60);
@@ -394,8 +395,13 @@ async fn serve(
             Some(completion)=jobs.join_next(),if !jobs.is_empty()=> {
                 match completion {Ok((id,revision,interval))=>{running.remove(&id);due.insert(id,(revision,Instant::now()+Duration::from_secs(interval)));},Err(e)=>eprintln!("poll worker failed: {e}")}
             },
+            Some(completion)=webhooks.join_next(),if !webhooks.is_empty()=>{if completion.is_err(){eprintln!("webhook worker failed; details excluded");}},
             Some(completion)=delivery.join_next(),if !delivery.is_empty()=>{if let Err(e)=completion {eprintln!("notification worker failed: {e}");}},
             _=ticker.tick()=> {
+                while webhooks.len()<4 {
+                    let api=worker_api.clone();
+                    webhooks.spawn(async move {if api.deliver_one_webhook().await.is_err(){eprintln!("webhook worker failed; details excluded");}});
+                }
                 if Instant::now()>=next_reap {
                     next_reap=Instant::now()+Duration::from_secs(60);
                     let jobs=worker_api.jobs.clone();
@@ -453,6 +459,7 @@ async fn serve(
     worker_api.jobs.shutdown();
     snmp_receiver.stop().await;
     jobs.abort_all();
+    webhooks.abort_all();
     delivery.abort_all();
     api.abort();
     while jobs.join_next().await.is_some() {}

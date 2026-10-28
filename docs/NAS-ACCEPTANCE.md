@@ -28,12 +28,17 @@ APC/Eaton/RFC 1628 profiles ship explicitly untested on real hardware. Their
 future hardware checks do not block the agreed release. DSM package downgrade
 is outside the supported path, separate from transactional failure recovery.
 
+## Outgoing webhook confirmation
+
+On 28 October 2026 the user confirmed functional testing of the outgoing webhook implementation. This confirmation covers the reported functional use of version 0.10.0. Individual destinations, Discord/Slack accounts, NAS versions and failure scenarios were not enumerated; no broader deployment matrix is inferred. Automated source, UI, archive, local HTTP/HTTPS and package results are recorded in [Validation](VALIDATION.md#outgoing-webhooks-0100).
+
 ## Additional coverage, not a reopening of accepted checks
 
 | Area | Useful remaining evidence |
 |---|---|
 | Current UI corrections | Native DSM display of total retained event count and the two 0064 spacing corrections; locally tested. The two 0065 log-setting corrections are confirmed above and are no longer open. |
 | Languages | Automatic detection, explicit English/German, errors, translated CSV/new events, channel-specific language and preserved custom/vendor text |
+| Webhooks | Destination/service-specific account and permission variants, outages/rate limits and long-running recovery on the actual deployment; the functional confirmation above remains accepted |
 | Permissions | Denied/viewer users, session expiry, full DSM Application Privileges/menu integration and directory-service group resolution |
 | Manual email replay | Preview/original ID/time, one requested recipient, separate history/Message-ID, unchanged alarm and original delivery; local SMTP/UI coverage exists |
 | Hardware | Further model/firmware/security combinations, license-specific iLO access, two independent faults/partial recovery and unavailable-data retention |

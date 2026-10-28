@@ -49,6 +49,9 @@ fn converted(archive: archive::Archive, format: u32) -> archive::Archive {
     value["format"] = json!(format);
     let tables = value["tables"].as_object_mut().unwrap();
     tables.remove("history_settings");
+    for (table, _) in hardware_monitor::webhook::TABLES {
+        tables.remove(*table);
+    }
     for (table, _) in TABLES {
         tables.remove(*table);
     }
@@ -361,7 +364,7 @@ fn legacy_archives_one_through_four_convert_to_current_without_secret_loss() {
             "synthetic-backup-password",
         )
         .unwrap();
-        assert_eq!(serde_json::to_value(&decoded).unwrap()["format"], 7);
+        assert_eq!(serde_json::to_value(&decoded).unwrap()["format"], 8);
         let target = tempfile::tempdir().unwrap();
         let v2 = Vault::open(&target.path().join("master.key")).unwrap();
         let mut t = Store::open(target.path()).unwrap();

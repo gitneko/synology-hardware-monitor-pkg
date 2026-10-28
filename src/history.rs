@@ -71,6 +71,7 @@ impl Store {
             "Verifiziert",
             "Vorläufig",
             "Empfangsbeleg",
+            "Webhook-Versand",
         ];
         csv.push_str(
             &headers
@@ -169,6 +170,8 @@ impl Store {
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ];
+            let mut values = values;
+            values.push(serde_json::to_string(&e["webhooks"])?);
             csv.push_str(&values.iter().map(|v| cell(v)).collect::<Vec<_>>().join(";"));
             csv.push_str("\r\n");
             count += 1;

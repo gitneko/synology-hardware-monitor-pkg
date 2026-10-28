@@ -1,8 +1,8 @@
 # Implementation status and roadmap
 
-Current package: **0.9.0-0065**. SNMP polling, trap reception, alarm integration,
-setup UI, maintained documentation and local package/reference checks are
-implemented. The [current acceptance record](VALIDATION.md#current-acceptance)
+Current version: **0.10.0**. SNMP polling, trap reception, alarm integration,
+outgoing HTTP/HTTPS webhooks, setup UI, maintained documentation and local
+package/reference checks are implemented. The [current acceptance record](VALIDATION.md#current-acceptance)
 includes the user's completed core workflow and duplicate-handling acceptance.
 APC/Eaton/RFC 1628 UPS profiles ship explicitly untested on real hardware.
 
@@ -13,13 +13,13 @@ APC/Eaton/RFC 1628 UPS profiles ship explicitly untested on real hardware.
 - Explicit Redfish or SNMP primary polling, optional independent traps,
   reviewed v3 identity, privileged-port helper and explicit clock compatibility.
 - Persistent hardware faults, poll-owned recovery, provisional trap evidence,
-  acknowledgement/reset, deduplication/grouping and independent SMTP/desktop jobs.
+  acknowledgement/reset, deduplication/grouping and independent SMTP/desktop/webhook jobs.
 - Retention, full-history CSV, event clearing and file-backed encrypted streaming
   backup/restore with progress/cancellation and safe paused restoration.
 - Local development without DSM/app login, including Redfish/SNMP through normal
   collectors; excluded from SPKs. Static protocol/package and upgrade regressions.
 
-[SNMP](SNMP.md), [Architecture](ARCHITECTURE.md), [Development](DEVELOPMENT.md),
+[SNMP](SNMP.md), [Outgoing webhooks](WEBHOOKS.md), [Architecture](ARCHITECTURE.md), [Development](DEVELOPMENT.md),
 [Compatibility](HARDWARE-COMPATIBILITY.md) and [Validation](VALIDATION.md) own the
 maintained contracts. Temporary phase/review/result reports have been consolidated
 and removed. Required numeric source records, dependency licenses/checksums,
@@ -67,3 +67,7 @@ These boundaries do not reopen accepted core SNMP checks:
 
 No implementation budget is allocated to these future features. Revisit with a
 concrete requirement; none is required to use the current bounded SNMP workflow.
+
+## 0.10.0 outgoing webhooks
+
+Implemented: custom HTTP/HTTPS destinations, generic/custom JSON, text, URL-encoded and multipart text fields, editable Discord/Slack messages, Discord embeds and sender identity, per-target event/device selection and language, authentication, preview/test actions and durable delivery history. The user has confirmed functional testing. [Webhook documentation](WEBHOOKS.md) defines the contract; [Validation](VALIDATION.md#outgoing-webhooks-0100) distinguishes local checks and the reported testing. Binary attachments, HMAC signing and additional HTTP methods are deferred and have no delivery commitment.

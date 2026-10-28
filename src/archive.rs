@@ -89,9 +89,12 @@ pub(crate) const TABLES: &[(&str,&str)]=&[
     ("desktop_jobs","event_id,recipient,revision,delivered,attempts,next_try,error,cancelled"),
     ("audit_log","id,actor,action,device,outcome,created"),
 ];
-pub(crate) const FORMAT: u32 = 7;
+pub(crate) const FORMAT: u32 = 8;
 pub(crate) fn table_specs() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
-    TABLES.iter().chain(crate::snmp::persistence::TABLES.iter())
+    TABLES
+        .iter()
+        .chain(crate::snmp::persistence::TABLES.iter())
+        .chain(crate::webhook::TABLES.iter())
 }
 pub(crate) fn purpose(value: &str) -> Result<crate::snmp::secrets::Purpose> {
     match value {
@@ -275,12 +278,12 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
         }
         if archive.format == 5 {
             anyhow::ensure!(
-                archive.tables.len() == table_specs().count() - 1
+                archive.tables.len() == table_specs().count() - 3
                     && !archive.tables.contains_key("history_settings"),
                 "legacy SNMP tables"
             );
             add_history_settings(&mut archive)?;
-            archive.format = FORMAT;
+            archive.format = 7;
         }
         if archive.format == 6 {
             anyhow::ensure!(
@@ -302,6 +305,20 @@ pub fn decrypt(file: &str, password: &str) -> Result<Archive> {
                     )?),
                     Cell::Integer(0),
                 ]);
+            archive.format = 7;
+        }
+        if archive.format == 7 {
+            anyhow::ensure!(
+                archive.tables.len() == table_specs().count() - crate::webhook::TABLES.len(),
+                "legacy webhook tables"
+            );
+            for (table, _) in crate::webhook::TABLES {
+                anyhow::ensure!(
+                    !archive.tables.contains_key(*table),
+                    "unexpected webhook table"
+                );
+                archive.tables.insert((*table).into(), Vec::new());
+            }
             archive.format = FORMAT;
         }
         archive.validate_layout()?;
@@ -343,9 +360,17 @@ impl Store {
                     };
                     cells.push(value);
                 }
-                if *table == "devices" || *table == "mail_settings" || *table == "protocol_secrets"
+                if *table == "devices"
+                    || *table == "mail_settings"
+                    || *table == "protocol_secrets"
+                    || *table == "webhook_endpoints"
                 {
-                    let id = if *table == "devices" {
+                    let id = if *table == "webhook_endpoints" {
+                        let Cell::Text(id) = &cells[0] else {
+                            anyhow::bail!("webhook ID")
+                        };
+                        crate::webhook::aad(id)
+                    } else if *table == "devices" {
                         match &cells[0] {
                             Cell::Text(s) => s.clone(),
                             _ => anyhow::bail!("device ID"),
@@ -434,6 +459,11 @@ impl Store {
         expected_audit: i64,
     ) -> Result<()> {
         let history_revision = self.retention_settings()?.1;
+        let webhook_revision: i64 = self.0.query_row(
+            "SELECT COALESCE(MAX(revision),0) FROM webhook_endpoints",
+            [],
+            |r| r.get(0),
+        )?;
         let tx = self
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -465,6 +495,8 @@ impl Store {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
         for table in [
+            "webhook_jobs",
+            "webhook_endpoints",
             "mail_replay",
             "mail_recipient",
             "desktop_jobs",
@@ -494,9 +526,15 @@ impl Store {
                 if !sealed
                     && (*table == "devices"
                         || *table == "mail_settings"
-                        || *table == "protocol_secrets")
+                        || *table == "protocol_secrets"
+                        || *table == "webhook_endpoints")
                 {
-                    let id = if *table == "devices" {
+                    let id = if *table == "webhook_endpoints" {
+                        let Value::Text(id) = &values[0] else {
+                            anyhow::bail!("webhook ID")
+                        };
+                        crate::webhook::aad(id)
+                    } else if *table == "devices" {
                         match &values[0] {
                             Value::Text(s) => s.clone(),
                             _ => anyhow::bail!("device ID"),
@@ -788,6 +826,7 @@ impl Store {
             !tx.prepare("PRAGMA foreign_key_check")?.exists([])?,
             "foreign keys"
         );
+        crate::webhook::restore(&tx, vault, webhook_revision)?;
         crate::log_query::reconcile_all_disabled(&tx)?;
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL", [])?;
         crate::mail_replay::cancel(&tx, crate::now())?;
@@ -855,6 +894,9 @@ mod tests {
         for format in [5, 6] {
             let mut old = store.make_archive(&vault).unwrap();
             old.format = format;
+            for (table, _) in crate::webhook::TABLES {
+                old.tables.remove(*table);
+            }
             if format == 5 {
                 old.tables.remove("history_settings");
             } else {
@@ -1009,6 +1051,9 @@ mod tests {
             old.tables.remove(*table);
         }
         old.format = 3;
+        for (table, _) in crate::webhook::TABLES {
+            old.tables.remove(*table);
+        }
         old.tables.remove("mail_replay");
         let decoded = decrypt(
             &encrypt(&old, "synthetic-backup-password").unwrap(),
@@ -1079,6 +1124,9 @@ mod tests {
             legacy.tables.remove(*table);
         }
         legacy.format = 2;
+        for (table, _) in crate::webhook::TABLES {
+            legacy.tables.remove(*table);
+        }
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
         let decoded = decrypt(
@@ -1186,6 +1234,9 @@ mod tests {
             legacy.tables.remove(*table);
         }
         legacy.format = 1;
+        for (table, _) in crate::webhook::TABLES {
+            legacy.tables.remove(*table);
+        }
         legacy.tables.remove("alarm_control");
         legacy.tables.remove("mail_replay");
         for table in ["mail_settings", "notification_settings"] {

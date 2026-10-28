@@ -112,7 +112,7 @@ impl Store {
 }
 
 // A pending submission must never disappear as a side effect of time retention.
-const ELIGIBLE: &str = "NOT EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=e.id AND o.delivered IS NULL AND o.cancelled=0 AND (o.transport IS NULL OR o.transport<>'smtp' OR EXISTS(SELECT 1 FROM mail_recipient m WHERE m.outbox_id=o.id AND m.delivered IS NULL AND m.permanent=0 AND m.attempts<8))) AND NOT EXISTS(SELECT 1 FROM desktop_jobs d WHERE d.event_id=e.id AND d.delivered IS NULL AND d.cancelled=0 AND d.attempts<8) AND NOT EXISTS(SELECT 1 FROM mail_replay r WHERE r.event_id=e.id AND r.state='queued')";
+const ELIGIBLE: &str = "NOT EXISTS(SELECT 1 FROM webhook_jobs w WHERE w.event_id=e.id AND w.delivered IS NULL AND w.cancelled=0 AND w.permanent=0) AND NOT EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=e.id AND o.delivered IS NULL AND o.cancelled=0 AND (o.transport IS NULL OR o.transport<>'smtp' OR EXISTS(SELECT 1 FROM mail_recipient m WHERE m.outbox_id=o.id AND m.delivered IS NULL AND m.permanent=0 AND m.attempts<8))) AND NOT EXISTS(SELECT 1 FROM desktop_jobs d WHERE d.event_id=e.id AND d.delivered IS NULL AND d.cancelled=0 AND d.attempts<8) AND NOT EXISTS(SELECT 1 FROM mail_replay r WHERE r.event_id=e.id AND r.state='queued')";
 const LOG_TIME: &str = "hardware_log_time(data)";
 fn cutoffs(settings: &Settings, now: i64) -> (i64, i64) {
     (
