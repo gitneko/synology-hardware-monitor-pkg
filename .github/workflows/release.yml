@@ -1,0 +1,83 @@
+name: Build and release tagged SPK
+
+on:
+  create:
+  push:
+    tags:
+      - '**'
+      - '!latest'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    # New tags emit both events; handle creation once, then subsequent pushes.
+    if: >-
+      github.ref_type == 'tag' && github.ref_name != 'latest' &&
+      (github.event_name == 'create' ||
+       (github.event.created == false && github.event.deleted == false))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential binutils curl openssl perl python3 snmp snmpd
+      - name: Build pinned musl toolchain
+        run: sh tools/bootstrap_musl.sh
+      - name: Build and validate DSM 7 package
+        run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          python3 tools/build_packages.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tagged-spk
+          path: dist/current/latest-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tagged-spk
+          path: release-assets
+      - name: Verify release checksums
+        working-directory: release-assets
+        run: sha256sum --check SHA256SUMS
+      - name: Create GitHub release and attach checked assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          assets=(
+            release-assets/HardwareMonitor-dsm7-x86_64.spk
+            release-assets/build-manifest.json
+            release-assets/SHA256SUMS
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi

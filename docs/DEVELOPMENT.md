@@ -136,9 +136,24 @@ Only a push/manual run on the repository's **default branch** can publish. The p
 
 The existing development release is updated with `gh release upload --clobber`: the same three asset names are replaced. Old package/manifest assets managed by this workflow, including the retired package asset, are removed after a successful upload; unrelated assets are preserved. No release is changed by local tests. The tag is `latest`, and the release is marked **prerelease** because these are development packages; this is separate from GitHub's stable-release “Latest” badge. A permanent download link has the form `https://github.com/OWNER/REPO/releases/download/latest/HardwareMonitor-dsm7-x86_64.spk`.
 
-Asset replacement is not atomic. A failed upload can leave incomplete or temporarily mismatched assets; the workflow fails and must be rerun, and downloaders should verify checksums after a successful run. Immutable releases cannot be reused; the publisher refuses them before moving the tag. Repository rules must allow updating `latest` and release assets. Keep immutable, versioned releases separate if added later.
+Asset replacement is not atomic. A failed upload can leave incomplete or temporarily mismatched assets; the workflow fails and must be rerun, and downloaders should verify checksums after a successful run. Immutable releases cannot be reused; the publisher refuses them before moving the tag. Repository rules must allow updating `latest` and release assets.
 
 After pushing this project to GitHub, enable Actions and allow the workflow token to write repository contents/releases in repository or organization policy. Local validation did not dispatch a hosted Actions run or publish release assets; local workflow syntax validation does not establish a successful hosted run. A manual dispatch on a feature branch builds artifacts but does not publish.
+
+## Tagged GitHub releases
+
+The separate `.github/workflows/release.yml` workflow builds and publishes when a tag is created on GitHub or an existing tag is pushed. New tags emit both `create` and `push`; only the creation event builds that new tag. Branch events and the reserved rolling `latest` tag are excluded.
+
+For example, after committing the intended package version, create and push a release tag:
+
+```sh
+git tag v0.10.0
+git push origin v0.10.0
+```
+
+The workflow checks out the tagged commit and runs the same pinned musl/static SPK build and integration/package checks as the existing package job, including both SNMP load cases. Only a successful build permits the release job to run. It verifies checksums and creates a release for the existing tag with generated release notes, attaching `HardwareMonitor-dsm7-x86_64.spk`, `build-manifest.json` and `SHA256SUMS`. The build job has read access; only the release job receives `contents: write` through GitHub's built-in token. No additional secret is needed.
+
+Runs for the same tag are serialized. Rerunning the workflow or pushing an updated tag uploads the checked assets to the existing release with `--clobber`; existing release notes are preserved. Immutable releases reject replacement uploads. The workflow does not move tags or change package versions: update the version metadata and DSM build number before tagging an installable update. Packages retain their existing unsigned development status and hardware acceptance boundaries.
 
 ## README screenshots
 
