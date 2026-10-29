@@ -1,4 +1,7 @@
 #!/bin/sh
 set -eu
+
+# Lifecycle commands are native even when launched from a DSM web request.
+unset GATEWAY_INTERFACE
 /var/packages/HardwareMonitor/scripts/start-stop-status stop
 /var/packages/HardwareMonitor/target/bin/hardware-monitor backup --directory "/var/packages/HardwareMonitor/etc/backup-$(date +%Y%m%d-%H%M%S)"

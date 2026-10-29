@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# Lifecycle commands are native even when launched from a DSM web request.
+unset GATEWAY_INTERFACE
 umask 077
 # Private package state is kept under the DSM 7 package identity.
 mkdir -p /var/packages/HardwareMonitor/etc/private

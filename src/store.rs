@@ -203,6 +203,7 @@ impl Store {
             conn.execute("UPDATE schema_version SET version=2", [])?;
         }
         crate::log_query::reconcile_all_disabled(&conn)?;
+        crate::log_dedup::migrate(&conn)?;
         conn.commit()?;
         database.busy_timeout(std::time::Duration::from_secs(5))?;
         Ok(Self(database))
@@ -613,7 +614,11 @@ impl Store {
                 "INSERT OR IGNORE INTO hardware_logs VALUES(?1,?2,?3)",
                 params![d.id, log.fingerprint, serde_json::to_string(log)?],
             )?;
+            let previously_truncated = inserted > 0
+                && d.primary_protocol == PrimaryProtocol::Redfish
+                && crate::log_dedup::adopt_truncated(&tx, &d.id, log)?;
             if inserted > 0
+                && !previously_truncated
                 && initialized
                 && matches!(log.severity, Health::Warning | Health::Critical)
             {

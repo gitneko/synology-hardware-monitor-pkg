@@ -828,6 +828,7 @@ impl Store {
         );
         crate::webhook::restore(&tx, vault, webhook_revision)?;
         crate::log_query::reconcile_all_disabled(&tx)?;
+        crate::log_dedup::migrate(&tx)?;
         tx.execute("UPDATE outbox SET cancelled=1 WHERE delivered IS NULL", [])?;
         crate::mail_replay::cancel(&tx, crate::now())?;
         tx.execute(

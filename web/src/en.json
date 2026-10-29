@@ -389,7 +389,7 @@
   "Es laufen bereits Verbindungsprüfungen. Bitte kurz warten.": "Connection tests are already running. Please wait.",
   "Die Anfrage konnte nicht ausgeführt werden. Bitte Anmeldung und Angaben prüfen.": "The request could not be completed. Check your sign-in and input.",
   "DSM-Anmeldung prüfen; Monitoring-Dienst muss laufen": "Check DSM sign-in; the monitoring service must be running",
-  "Zeitüberschreitung bei der Anmeldung": "Sign-in timed out",
+  "Zeitüberschreitung bei der Antwort des Monitoring-Dienstes. Bitte erneut versuchen.": "The monitoring service took too long to respond. Please try again.",
   "Ereignis-ID": "Event ID",
   "Erfasst (UTC)": "Recorded (UTC)",
   "Erfasst (Lokalzeit)": "Recorded (local time)",

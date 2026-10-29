@@ -166,8 +166,10 @@ Package state initialization is explicit in `postinst` (install/upgrade/repair),
 using the same `initialize` CLI path as ordinary startup. A schema-1 backup is
 synced and published before transactional schema-2 DDL. Startup database
 contention has a 30-second busy timeout; normal database operations retain five
-seconds. Service readiness allows 120 seconds, requires an actual socket
-connection and is published after listener/shutdown-handler setup. DSM stopped
+seconds. Service start also completes initialization in the controller before
+launching the daemon. The subsequent 120-second readiness budget requires an
+actual socket connection and is published after listener/shutdown-handler setup.
+The migration backup therefore does not consume the daemon readiness budget. DSM stopped
 and unknown status codes are 3 and 4 respectively. These paths are covered by
 native and static direct-upgrade regressions, separately from NAS acceptance.
 

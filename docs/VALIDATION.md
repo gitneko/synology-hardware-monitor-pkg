@@ -1,6 +1,6 @@
 # Validation and evidence boundaries
 
-Current version: **0.10.0**. Local source/reference/package checks,
+Current version: **0.10.1**. Local source/reference/package checks,
 authorized live read-only collector runs and user-reported NAS acceptance are
 separate evidence. The [compatibility matrix](HARDWARE-COMPATIBILITY.md) records
 actual combinations; [SNMP](SNMP.md) describes operation and limitations.
@@ -46,6 +46,18 @@ The reported core SNMP acceptance workflow is complete. Broader targets,
 unreported security variants, long-running load and full DSM role integration
 remain additional coverage, not a reopening of those accepted checks. See
 [NAS acceptance](NAS-ACCEPTANCE.md) and [Roadmap](ROADMAP.md).
+
+## Redfish timestamp/text log identity (0.10.1)
+
+Build 0074 deduplicates dated Redfish logs per device using the normalized source instant and complete original message before the existing display/storage truncation. Resource addresses and entry IDs are excluded; identical time/text records intentionally merge. Undated/invalid timestamps retain the prior resource-identity fallback, and SNMP identity is unchanged.
+
+Six regression tests cover moving HPE/Dell-shaped addresses, equivalent timestamp offsets/precision, distinct nanoseconds/text/devices, message suffixes beyond 1000 characters, 100 repeated reads with store restart and email/desktop/webhook queue counts, transactional cache migration and rollback, legacy archive restore, and one-time adoption of old truncated messages. The HTTPS Redfish integration changes entry IDs repeatedly across separate CLI processes and checks a single hardware-log event. Historical application events and completed deliveries are preserved. See [release notes](RELEASE-NOTES-0.10.1.md) for migration semantics.
+
+The polling-reference failure recorded for local build 0073 was reproduced on the unmodified 0.10.0-0072 product and with an independent Net-SNMP client. Plain UDP controls then showed that the default WSL network did not deliver 1500-byte and larger loopback datagrams. This explained both larger GETBULK responses and the later large-trap capture timeout. A restricted MIB view only masked the problem by making responses smaller and was not retained.
+
+A fresh network namespace with only loopback enabled delivered the same 1500-byte through 16-KiB datagrams and passed the original four polling configurations and large generated traps. Build 0074 runs the original complete package/reference checks in that isolated local network; host network/firewall settings remain untouched. Product SNMP code, test fixtures, authentication/encryption, timeouts, retries and health rules are unchanged.
+
+This is local source/protocol evidence. Real NAS/controller confirmation for this fix remains pending.
 
 ## Outgoing webhooks (0.10.0)
 
@@ -403,3 +415,13 @@ The corrected flow waits for an explicit download click, obtains the current DSM
 Validation passed: **148 library tests plus two native bridge tests (150 Rust tests total with local-dev enabled)**, **53 frontend tests**, **19 Python tool tests**, formatting, Clippy with warnings denied with and without local-dev, Vue compilation and the static generic x86-64 musl production build. New tests cover encoded/empty-header token transport, rejected malformed/duplicate parameters and write use, HEAD owner/role checks, HTML/JSON/expired-session rejection, no whole-file buffering, explicit filenames and temporary-link removal. In-memory async transport tests exercise the production bridge helpers: exact 300,000-byte GET transfer, 8-GiB sparse-file HEAD metadata with no body, and truncated-stream failure.
 
 Full loopback/CGI/service integration remains blocked by socket-bind permission (`EPERM`) in this execution environment. The unrestricted integration scripts include actual HEAD/raw-GET requests and query-token forwarding. The new native DSM download still requires target acceptance. The candidate is `dist/download-0043/HardwareMonitor-0.8.0-0043-x86_64-dsm7-development.spk`; existing archive contents/format and retention behavior are unchanged by this fix.
+
+## Backup snapshot regression (0.10.2-0075)
+
+A synthetic WAL database is modified from a separate live connection between every 256-page copy step. The previous incremental snapshot restarts indefinitely; the fixed implementation pins a read transaction and completes at a consistent point in time. Regression checks cover monotonic progress, continuing live writes, integrity, cancellation and release of WAL checkpoint blockers. The reported later NAS UI timeout has not been independently reproduced.
+
+## Slow legacy startup and inherited CGI environment (0.10.3-0077)
+
+Native initialization and service lifecycle are exercised with an inherited DSM-style CGI environment. Genuine CGI dispatch remains covered. A separate acceptance script uses a 1152 MiB synthetic schema-1 database and checks its protected backup, integrity and repeated repair. A controller paused during pending initialization for 125 seconds checks that this delay does not consume the daemon readiness budget. The controlled pause is a Linux scheduling/IO-delay model; NAS acceptance remains separate.
+
+NAS feedback: the user confirmed the reported repair/update workflow with 0.10.3-0077 as working. The later button-spacing change is a source-only UI follow-up; it is not included in the already delivered SPK.

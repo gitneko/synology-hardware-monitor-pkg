@@ -8,7 +8,7 @@ Due to thirdparty package limitations imposed by Synology, this package does not
 and instead sends e-mails directly using SMTP, configured by you. DSM desktop notifications are available.
 You can choose if you want either, none or both.
 
-**Current version: 0.10.0.** Adds [outgoing HTTP/HTTPS webhooks](docs/WEBHOOKS.md) with custom text, JSON, form and multipart messages. The Package Center title is **Hardware Monitor**.
+**Current version: 0.10.3.**. The Package Center title is **Hardware Monitor**.
 
 ## Features
 

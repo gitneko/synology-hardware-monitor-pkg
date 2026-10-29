@@ -22,7 +22,7 @@ function defaults(){form.subject_template='[Hardware Monitor] {{health}} – {{d
 </script>
 <template>
 <section class="panel mail-settings device-editor">
- <header><div><p class="eyebrow">{{t("BENACHRICHTIGUNGEN")}}</p><h2>{{t("E-Mail-Versand")}}</h2><button type="button" class="refresh" :disabled="busy" @click="load">{{t("Gespeicherte Angaben laden")}}</button><p class="form-note">{{t("Versand über deinen SMTP-Server. Ein eigener SMTP-Server wird auf dem NAS nicht betrieben.")}}</p></div></header>
+ <header><div><p class="eyebrow">{{t("BENACHRICHTIGUNGEN")}}</p><h2>{{t("E-Mail-Versand")}}</h2><button type="button" class="refresh settings-reload" :disabled="busy" @click="load">{{t("Gespeicherte Angaben laden")}}</button><p class="form-note">{{t("Versand über deinen SMTP-Server. Ein eigener SMTP-Server wird auf dem NAS nicht betrieben.")}}</p></div></header>
  <form @submit.prevent="run('mail_save')"><fieldset :disabled="busy">
  <label class="check"><input v-model="form.enabled" type="checkbox">{{t("Automatische E-Mails aktivieren")}}</label>
  <p class="form-note">{{t("Gilt für künftige ausgewählte Ereignisse der Geräte mit aktivierter Benachrichtigungsoption. Bisherige Meldungen werden nicht nachgesendet. Beim Speichern werden noch offene E-Mail-Aufträge storniert; bereits angenommene E-Mails können nicht zurückgerufen werden.")}}</p>

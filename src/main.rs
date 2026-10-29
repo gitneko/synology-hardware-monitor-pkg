@@ -105,11 +105,16 @@ async fn main() -> Result<()> {
     unsafe {
         libc::umask(0o077);
     }
-    if std::env::args_os()
+    let mut arguments = std::env::args_os();
+    let cgi_entrypoint = arguments
         .next()
-        .is_some_and(|p| Path::new(&p).file_name().is_some_and(|n| n == "api.cgi"))
-        || std::env::var("GATEWAY_INTERFACE").is_ok_and(|v| v.starts_with("CGI/"))
-    {
+        .is_some_and(|p| Path::new(&p).file_name().is_some_and(|n| n == "api.cgi"));
+    // DSM lifecycle hooks can inherit the Package Center web environment.
+    // A named CGI entrypoint always stays CGI; explicit native commands win
+    // over an inherited marker on the ordinary hardware-monitor executable.
+    let inherited_cgi = arguments.next().is_none()
+        && std::env::var("GATEWAY_INTERFACE").is_ok_and(|v| v.starts_with("CGI/"));
+    if cgi_entrypoint || inherited_cgi {
         return cgi(Path::new("/var/packages/HardwareMonitor/etc/api.sock")).await;
     }
     #[allow(unused_mut)]
@@ -141,15 +146,7 @@ async fn main() -> Result<()> {
             Err(error) => return Err(error),
         }
     }
-    vault::private_dir(&cli.state)?;
-    anyhow::ensure!(
-        !cli.state.join("monitor.db").exists() || cli.state.join("master.key").exists(),
-        "master key missing for existing database; restore key backup"
-    );
-    let vault = Arc::new(
-        Vault::open(&cli.state.join("master.key")).context("open private credential key")?,
-    );
-    let mut store = Store::open(&cli.state).context("initialize package database")?;
+    let (vault, mut store) = open_state(&cli.state)?;
     match cli.command {
         Command::DevicePut {
             file,
@@ -692,7 +689,7 @@ async fn cgi(socket: &Path) -> Result<()> {
             json!({"ok":false,"error":"DSM-Anmeldung prüfen; Monitoring-Dienst muss laufen", "code":dsm::error_code(&error)})
         }
         Err(_) => {
-            json!({"ok":false,"error":"Zeitüberschreitung bei der Anmeldung", "code":"api_timeout"})
+            json!({"ok":false,"error":"Zeitüberschreitung bei der Antwort des Monitoring-Dienstes. Bitte erneut versuchen.", "code":"api_timeout"})
         }
     };
     if streamed {
@@ -762,6 +759,20 @@ async fn live_service_pid(cli: &Cli) -> Option<i32> {
     Some(pid)
 }
 
+// Shared by explicit initialize/CLI commands and service-start's fallback.
+// Keep migration and its protected backup outside the daemon readiness budget.
+fn open_state(state: &Path) -> Result<(Arc<Vault>, Store)> {
+    vault::private_dir(state)?;
+    anyhow::ensure!(
+        !state.join("monitor.db").exists() || state.join("master.key").exists(),
+        "master key missing for existing database; restore key backup"
+    );
+    let vault =
+        Arc::new(Vault::open(&state.join("master.key")).context("open private credential key")?);
+    let store = Store::open(state).context("initialize package database")?;
+    Ok((vault, store))
+}
+
 async fn service(cli: &Cli, action: &str, notify: bool) -> Result<bool> {
     vault::private_dir(&cli.state)?;
     match action {
@@ -770,6 +781,14 @@ async fn service(cli: &Cli, action: &str, notify: bool) -> Result<bool> {
             if live_service_pid(cli).await.is_some() {
                 return Ok(true);
             }
+            // Post-install normally initializes first. Reconcile here too,
+            // including repairs that previously skipped it under CGI variables.
+            // This runs in the controller itself: no orphan migration child and
+            // no 120-second watchdog killing a healthy multi-GiB database copy.
+            let (vault, store) =
+                open_state(&cli.state).context("initialize private state before daemon startup")?;
+            drop(store);
+            drop(vault);
             let log = OpenOptions::new()
                 .append(true)
                 .create(true)
@@ -797,8 +816,8 @@ async fn service(cli: &Cli, action: &str, notify: bool) -> Result<bool> {
                 });
             }
             let mut child = cmd.spawn()?;
-            // Direct upgrades back up and migrate schema 1 before serve()
-            // publishes its PID/socket. Allow slower or temporarily busy NASes.
+            // Migration is already complete. This budget covers ordinary
+            // daemon/listener readiness, never the pre-migration backup.
             let deadline = Instant::now() + Duration::from_secs(120);
             while Instant::now() < deadline {
                 if child.try_wait()?.is_some() {

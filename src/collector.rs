@@ -1182,7 +1182,7 @@ pub(crate) fn normalize(
             .get("Created")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        // The timestamp/message protect against reused entry IDs after log clear or rollover.
+        // Resource identity is only a fallback for missing/invalid source timestamps.
         let canonical = value
             .get("@odata.id")
             .and_then(Value::as_str)
@@ -1190,8 +1190,11 @@ pub(crate) fn normalize(
             .split(['?', '#'])
             .next()
             .unwrap_or(uri);
-        let identity = serde_json::to_vec(&(canonical, value.get("Id"), &created, message))
-            .unwrap_or_default();
+        let fallback_identity =
+            serde_json::to_vec(&(canonical, value.get("Id"), &created, message))
+                .unwrap_or_default();
+        let fingerprint = crate::log_dedup::fingerprint(created.as_deref(), message)
+            .unwrap_or_else(|| format!("{:x}", Sha256::digest(fallback_identity)));
         logs.push(HardwareLog {
             identity: Some(crate::model::LogIdentity {
                 record_id: value
@@ -1209,7 +1212,7 @@ pub(crate) fn normalize(
                     .map(|s| s.chars().take(1024).collect()),
                 occurrence: None,
             }),
-            fingerprint: format!("{:x}", Sha256::digest(identity)),
+            fingerprint,
             message: message.chars().take(1000).collect(),
             severity: match value.get("Severity").and_then(Value::as_str) {
                 Some("Critical") => Health::Critical,

@@ -11,7 +11,7 @@ async function save(){if(busy.value)return;busy.value=true;error.value='';messag
  try{const result=await administer(props.dashboard,{action:'notification_save',settings:{revision:revision.value,language:form.language,desktop_enabled:form.desktop_enabled,selection:{...form.selection}}},fetch,controller.signal);revision.value=result.revision;message.value=t("Benachrichtigungseinstellungen gespeichert. Offene Versandaufträge wurden storniert.");emit('saved');}
  catch(e){error.value=e.name==='AbortError'?t("Zeitüberschreitung. Bitte die Ansicht aktualisieren."):e.message;}finally{clearTimeout(timer);busy.value=false;}}
 </script>
-<template><section class="panel device-editor notification-settings"><header><div><p class="eyebrow">{{t("BENACHRICHTIGUNGEN")}}</p><h2>{{t("Kanäle & Ereignisse")}}</h2><button class="refresh" :disabled="busy" @click="load">{{t("Gespeicherte Angaben laden")}}</button></div></header>
+<template><section class="panel device-editor notification-settings"><header><div><p class="eyebrow">{{t("BENACHRICHTIGUNGEN")}}</p><h2>{{t("Kanäle & Ereignisse")}}</h2><button class="refresh settings-reload" :disabled="busy" @click="load">{{t("Gespeicherte Angaben laden")}}</button></div></header>
 <form @submit.prevent="save"><fieldset :disabled="busy">
 <p>{{t("Beim Gerät muss „Benachrichtigungen für dieses Gerät aktivieren“ eingeschaltet sein. Die folgenden Filter gelten gemeinsam für E-Mail und DSM-Desktop.")}}</p>
 <p v-if="dashboard.runtime==='local-development'" class="form-note">{{t("DSM-Desktopmeldungen sind im lokalen Entwicklungsmodus nicht verfügbar.")}}</p>

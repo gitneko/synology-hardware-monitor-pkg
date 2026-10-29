@@ -2,6 +2,9 @@
 # SPK lifecycle entry point; all monitoring and service control run in the native binary.
 # No optional DSM resource workers are required by this development package.
 set -eu
+
+# Lifecycle commands are native even when launched from a DSM web request.
+unset GATEWAY_INTERFACE
 case "${1:-}" in
  start) exec /var/packages/HardwareMonitor/target/bin/hardware-monitor service start ;;
  stop|status) exec /var/packages/HardwareMonitor/target/bin/hardware-monitor service "$1" ;;

@@ -63,7 +63,7 @@ class Mock(BaseHTTPRequestHandler):
             "/redfish/v1/Chassis/A/Thermal": {"Fans": [{"MemberId": "FanA", "Name": "Fan A", "Status": {"Health": state["health"], "State": state["fan_state"]}, "Reading": 32, "ReadingUnits": "Percent"}]},
             "/redfish/v1/Systems/NonNumeric/LogServices": {"Members": [{"@odata.id": "/redfish/v1/Systems/NonNumeric/LogServices/IML"}]},
             "/redfish/v1/Systems/NonNumeric/LogServices/IML": {"Entries": {"@odata.id": "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries"}},
-            "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries": {"Members": [{"Id": state["log"], "Message": "Synthetic historical fault", "Severity": "Critical", "EntryType": "Event", "Created": LOG_TIME}]},
+            "/redfish/v1/Systems/NonNumeric/LogServices/IML/Entries": {"Members": [{"Id": state["log"], "Message": state.get("log_message", "Synthetic historical fault"), "Severity": "Critical", "EntryType": "Event", "Created": LOG_TIME}]},
         }
         if self.path.endswith("/Storage") and (state["storage_failures"] or state["storage_forced_status"]):
             if state["storage_failures"]: state["storage_failures"] -= 1
@@ -224,11 +224,16 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         assert sum(p.endswith("/Storage") for p in requests) == 1  # no retry on 403
         assert any(a["health"] == "critical" and a["label"] == "Fan A" for a in partial["devices"][0]["alarms"])
         assert any(c["outcome"] == "forbidden_permission_or_license" for c in partial["devices"][0]["snapshot"]["capabilities"])
-        state["storage"] = True; state["health"] = "OK"; state["log"] = "new"; run("poll-once")
+        state["storage"] = True; state["health"] = "OK"; state["log"] = "new"; state["log_message"] = "Synthetic new fault"; run("poll-once")
         recovered = snapshot()
         assert any(e["kind"] == "recovery" and "Fan A" in e["message"] for e in recovered["events"])
         assert sum(e["kind"] == "hardware_log" for e in recovered["events"]) == 1
         assert next(e for e in recovered["events"] if e["kind"] == "hardware_log")["source_created"] == LOG_TIME
+        # Position-only changes (including separate CLI process restarts) never replay a log.
+        for shifted_id in ["189", "185", "115"]:
+            state["log"] = shifted_id
+            run("poll-once")
+            assert sum(e["kind"] == "hardware_log" for e in snapshot()["events"]) == 1
         # Device log policies do not affect hardware discovery.
         config['hardware_log']={'mode':'disabled'};put();requests.clear();run('poll-once')
         assert not any('/LogServices' in path for path in requests)
@@ -331,6 +336,14 @@ with tempfile.TemporaryDirectory(prefix="hardware-monitor-test-") as temp:
         # Standard CGI marker also dispatches correctly when argv[0] is not api.cgi.
         dispatched=subprocess.check_output([str(BINARY)],env={**base_env,"QUERY_STRING":"probe=1","GATEWAY_INTERFACE":"CGI/1.1"})
         assert b'"code":"cgi_ready"' in dispatched
+        # Package Center can export CGI variables to native lifecycle commands.
+        inherited={**fake_env,"GATEWAY_INTERFACE":"CGI/1.1","REQUEST_METHOD":"POST","CONTENT_TYPE":"application/x-www-form-urlencoded"}
+        native_state=temp/"cgi-native-state"
+        native=subprocess.run([str(BINARY),"--state",str(native_state),"initialize"],env=inherited,capture_output=True,check=True)
+        assert native.stdout.strip()==b"Private state initialized" and (native_state/"monitor.db").is_file()
+        native=subprocess.run([str(BINARY),"--state",str(native_state),"service","status"],env=inherited,capture_output=True)
+        assert native.returncode==3 and b"Status:" not in native.stdout
+        assert subprocess.check_output([str(BINARY),"--version"],env=inherited).strip()==f"hardware-monitor {VERSION}".encode()
         posted=run("cgi",env={**base_env,"REQUEST_METHOD":"POST","QUERY_STRING":"probe=1"})
         assert b"Status: 200 OK" in posted
         assert json.loads(posted.split(b"\r\n\r\n",1)[1])["code"]=="cgi_cookie_missing_or_invalid"

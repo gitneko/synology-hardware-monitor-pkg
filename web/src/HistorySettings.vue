@@ -40,9 +40,11 @@ async function perform(action){
   <label>{{t("Ereignishistorie aufbewahren (Tage)")}}<input v-model.number="form.events_days" type="number" min="0" max="36500" step="1" required></label>
   <label>{{t("Hardwarelogs aufbewahren (Tage)")}}<input v-model.number="form.hardware_logs_days" type="number" min="0" max="36500" step="1" required></label>
  </div>
+ <div class="action-row">
  <button class="primary" :disabled="!dirty||!valid" @click="perform('save')">{{t("Aufbewahrungsregeln speichern")}}</button>
  <button v-if="dirty||revision!==dashboard.history.revision" class="refresh" @click="reload">{{t("Gespeicherte Regeln neu laden")}}</button>
  <button class="refresh" :disabled="dirty" @click="perform('preview')">{{t("Bereinigung prüfen")}}</button>
+ </div>
  <div v-if="preview" class="maintenance-confirm">
   <p>{{t("Zur Bereinigung vorgesehen: {0} Ereignisse und {1} Hardwarelogs.",preview.counts.events,preview.counts.hardware_logs)}}</p>
   <p>{{t("{0} Hardwarelogs ohne verlässlichen Zeitstempel bleiben erhalten.",preview.counts.undated_hardware_logs)}}</p>

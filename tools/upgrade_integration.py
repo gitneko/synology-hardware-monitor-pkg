@@ -38,9 +38,9 @@ def require(condition, label):
         raise AssertionError(label)
 
 
-def invoke(binary, state, *command, success=True):
+def invoke(binary, state, *command, success=True, environment=None):
     result = subprocess.run([str(binary), '--state', str(state), '--socket', str(state.parent/'api.sock'), *command],
-                            capture_output=True, text=True, timeout=45)
+                            capture_output=True, text=True, timeout=45, env=environment)
     if success:
         require(result.returncode == 0, f'Upgrade check failed: {command[0]}; private log/output excluded')
     return result
@@ -117,22 +117,22 @@ def check_migration(state, before):
         require(not settings['enabled'], 'Upgrade enabled trap reception')
 
 
-def postinst(binary, state):
+def postinst(binary, state, environment=None):
     source = (ROOT/'packaging/scripts/postinst').read_text()
     invocation = shlex.join([str(binary), '--state', str(state), '--socket', str(state.parent/'api.sock')])
     script = source.replace('/var/packages/HardwareMonitor/target/bin/hardware-monitor', invocation).replace('/var/packages/HardwareMonitor/etc/private', shlex.quote(str(state)))
-    return subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=45)
+    return subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=45, env=environment)
 
 
-def lifecycle(binary, state):
-    require(invoke(binary, state, 'service', 'status', success=False).returncode == 3, 'DSM stopped status must be 3')
+def lifecycle(binary, state, environment=None):
+    require(invoke(binary, state, 'service', 'status', success=False, environment=environment).returncode == 3, 'DSM stopped status must be 3')
     try:
-        invoke(binary, state, 'service', 'start')
-        invoke(binary, state, 'service', 'status')
-        invoke(binary, state, 'service', 'start')
+        invoke(binary, state, 'service', 'start', environment=environment)
+        invoke(binary, state, 'service', 'status', environment=environment)
+        invoke(binary, state, 'service', 'start', environment=environment)
     finally:
-        invoke(binary, state, 'service', 'stop')
-    require(invoke(binary, state, 'service', 'status', success=False).returncode == 3, 'DSM stopped status must remain 3')
+        invoke(binary, state, 'service', 'stop', environment=environment)
+    require(invoke(binary, state, 'service', 'status', success=False, environment=environment).returncode == 3, 'DSM stopped status must remain 3')
 
 
 def main():
@@ -148,6 +148,15 @@ def main():
         require(postinst(binary, fresh).returncode == 0, 'Fresh postinst initialization failed')
         lifecycle(binary, fresh)
         results.append({'case':'fresh-postinst-and-DSM-status', 'passed':True})
+        inherited = {**os.environ, 'GATEWAY_INTERFACE':'CGI/1.1', 'REQUEST_METHOD':'POST',
+                     'CONTENT_TYPE':'application/x-www-form-urlencoded', 'HTTP_COOKIE':'id=synthetic-cookie',
+                     'REMOTE_ADDR':'127.0.0.1', 'SERVER_ADDR':'127.0.0.1'}
+        cgi_state = root/'cgi-inherited'/'private'
+        require(postinst(binary, cgi_state, inherited).returncode == 0, 'Postinst with inherited CGI environment failed')
+        log = (cgi_state/'service.log').read_text()
+        require('Private state initialized' in log and 'Status:' not in log, 'Postinst returned HTTP instead of initializing')
+        lifecycle(binary, cgi_state, inherited)
+        results.append({'case':'native-postinst-start-status-stop-under-inherited-CGI-environment', 'passed':True})
         state = root/'legacy'/'private'; before = seed(state, legacy)
         require(postinst(binary, state).returncode == 0, 'Direct upgrade postinst failed')
         check_migration(state, before)
@@ -179,6 +188,9 @@ def main():
         with sqlite3.connect(failed/'monitor.db') as db:
             raw = json.loads(db.execute('SELECT config FROM devices').fetchone()[0]); raw['id'] = 'wrong-device'; db.execute('UPDATE devices SET config=?',(json.dumps(raw),))
         require(postinst(binary, failed).returncode != 0, 'Invalid legacy configuration was silently accepted')
+        require(invoke(binary, failed, 'service', 'start', success=False).returncode != 0,
+                'Service start ignored failed initialization')
+        require(not (failed/'daemon.pid').exists(), 'Failed initialization started a daemon')
         with sqlite3.connect(failed/'monitor.db') as db:
             require(db.execute('SELECT version FROM schema_version').fetchone()[0] == 1, 'Failed migration changed schema')
             require(not db.execute("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='protocol_secrets')").fetchone()[0], 'Failed migration left partial schema')

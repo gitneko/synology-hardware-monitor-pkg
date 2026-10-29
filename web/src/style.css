@@ -26,7 +26,7 @@
 
 .badge.not_applicable{background:#eef2f1;color:#60726a}.assessment-reason{display:block;margin-top:6px;color:#6b7c73;font-size:10px;line-height:1.5}
 
-.acknowledged{color:#2159a5;background:#eaf2ff}.summary{grid-template-columns:repeat(5,1fr)}.alarm-action{margin-bottom:18px;font-size:11px}.alarm-dialog{border:0;width:560px}.alarm-dialog::backdrop{background:#102b2270}.alarm-dialog h2{font-size:20px}.alarm small{line-height:1.6;margin:6px 0 12px}@media(max-width:680px){.summary{grid-template-columns:repeat(2,1fr)}}
+.acknowledged{color:#2159a5;background:#eaf2ff}.summary{grid-template-columns:repeat(5,1fr)}.alarm-actions{margin-bottom:18px}.alarm-action{font-size:11px}.alarm-dialog{border:0;width:560px}.alarm-dialog::backdrop{background:#102b2270}.alarm-dialog h2{font-size:20px}.alarm small{line-height:1.6;margin:6px 0 12px}@media(max-width:680px){.summary{grid-template-columns:repeat(2,1fr)}}
 
 .alarm-filter{display:flex;align-items:center;gap:10px;margin:16px 22px;font-size:11px}.alarm-filter select{font:inherit;border:1px solid #cbd9d1;border-radius:5px;padding:6px;background:white;color:inherit}
 
@@ -59,3 +59,5 @@
 .webhook-settings .webhook-embeds{margin-top:20px}
 
 .webhook-settings>.webhook-target+form{margin-top:20px}
+
+.device-editor .settings-reload{margin-top:12px}.device-editor header .settings-reload+.form-note{margin-top:12px}

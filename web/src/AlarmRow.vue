@@ -36,8 +36,10 @@ async function save(){
   <small v-if="alarm.covered_by?.length">{{t('Benachrichtigung gebündelt mit:')}} {{coveredLabels(alarm,device)}}</small>
   <small v-if="alarm.assessment?.derived && status==='acknowledged'">{{t('Durch bestätigte Komponentenfehler abgedeckt.')}}</small>
   <small v-if="acknowledgement"><strong v-if="acknowledgement.needs_review">{{t('Importierte Bestätigung prüfen:')}}</strong> {{t('Bestätigt von {0} am {1}',acknowledgement.actor,timestamp(acknowledgement.created))}}<br>{{acknowledgement.reason}}</small>
-  <button v-if="editable" class="refresh alarm-action" @click="open('acknowledge')">{{ownAcknowledged?t('Bestätigung aufheben …'):t('Bestätigen …')}}</button>
-  <button v-if="editable" class="refresh alarm-action" @click="open('reset')">{{t('Gespeicherten Alarm zurücksetzen …')}}</button>
+  <div v-if="editable" class="action-row alarm-actions">
+  <button class="refresh alarm-action" @click="open('acknowledge')">{{ownAcknowledged?t('Bestätigung aufheben …'):t('Bestätigen …')}}</button>
+  <button class="refresh alarm-action" @click="open('reset')">{{t('Gespeicherten Alarm zurücksetzen …')}}</button>
+  </div>
   <dialog ref="dialog" class="device-editor alarm-dialog" :aria-label="dialogTitle" @cancel="busy && $event.preventDefault()">
     <form @submit.prevent="save">
       <h2>{{dialogTitle}}</h2>

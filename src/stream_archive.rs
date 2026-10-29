@@ -74,6 +74,13 @@ pub fn snapshot(source: &Path, destination: &Path, progress: &mut Progress<'_>) 
     )?;
     private_file(destination)?;
     let source = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // Pin one WAL snapshot for the entire incremental copy. Without a read
+    // transaction, commits on the live connection restart the backup at page 1.
+    // Monitoring can keep writing; RAII releases the read mark on cancellation.
+    let read = source.unchecked_transaction()?;
+    read.query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
     let mut target = Connection::open(destination)?;
     target.execute_batch("PRAGMA cache_size=-4096;")?;
     let page_size: u64 = source.pragma_query_value(None, "page_size", |r| r.get(0))?;
@@ -96,6 +103,7 @@ pub fn snapshot(source: &Path, destination: &Path, progress: &mut Progress<'_>) 
         free_space(destination.parent().unwrap(), 0)?;
     }
     drop(backup);
+    read.commit()?;
     drop(target);
     File::open(destination)?.sync_all()?;
     Ok(())
@@ -1044,42 +1052,96 @@ mod tests {
     }
 
     #[test]
-    fn online_snapshot_is_consistent_when_source_changes_between_steps() {
+    fn online_snapshot_finishes_while_source_changes_between_every_step() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source");
         let mut source = Store::open(&path).unwrap();
+        let original = "Synthetic snapshot padding. ".repeat(150);
         {
             let tx = source.0.transaction().unwrap();
             for id in 1..=2200 {
-                tx.execute("INSERT INTO events(id,device,key,kind,health,message,created) VALUES(?1,'removed','fan','alarm','\"critical\"',?2,100)",rusqlite::params![id,"Synthetic snapshot padding. ".repeat(150)]).unwrap();
+                tx.execute("INSERT INTO events(id,device,key,kind,health,message,created) VALUES(?1,'removed','fan','alarm','\"critical\"',?2,100)",rusqlite::params![id,original]).unwrap();
             }
             tx.commit().unwrap();
         }
         let file = dir.path().join("snapshot.db");
-        let mut changed = false;
+        let mut writes = 0;
+        let mut previous = 0;
         snapshot(&path.join("monitor.db"), &file, &mut |_, bytes| {
-            if bytes > 0 && !changed {
-                let tx = source.0.transaction().unwrap();
-                tx.execute(
-                    "UPDATE events SET message='new consistent value' WHERE id IN(1,2200)",
-                    [],
-                )
-                .unwrap();
-                tx.commit().unwrap();
-                changed = true;
+            anyhow::ensure!(writes < 64, "snapshot restarted by continuing writes");
+            assert!(bytes >= previous, "snapshot progress moved backwards");
+            previous = bytes;
+            if bytes > 0 {
+                writes += 1;
+                source
+                    .0
+                    .execute(
+                        "UPDATE events SET message=?1 WHERE id IN(1,2200)",
+                        [format!("committed during snapshot: {writes}")],
+                    )
+                    .unwrap();
             }
             Ok(())
         })
         .unwrap();
-        assert!(changed);
+        assert!(writes > 1, "exercise writes between multiple copy steps");
         let copied = Connection::open(file).unwrap();
-        assert_eq!(copied.query_row("SELECT count(*) FROM events WHERE id IN(1,2200) AND message='new consistent value'",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(
+            copied
+                .query_row(
+                    "SELECT count(*) FROM events WHERE id IN(1,2200) AND message=?1",
+                    [&original],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            source
+                .0
+                .query_row(
+                    "SELECT count(*) FROM events WHERE id IN(1,2200) AND message=?1",
+                    [format!("committed during snapshot: {writes}")],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
         assert_eq!(
             copied
                 .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
                 .unwrap(),
             "ok"
         );
+        // A completed copy must release its WAL read mark.
+        let busy: i64 = source
+            .0
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(busy, 0);
+        let cancelled = dir.path().join("cancelled.db");
+        assert!(
+            snapshot(&path.join("monitor.db"), &cancelled, &mut |_, bytes| {
+                if bytes > 0 {
+                    anyhow::bail!("cancelled during snapshot");
+                }
+                Ok(())
+            })
+            .is_err()
+        );
+        // Cancellation also releases the read transaction, including its WAL mark.
+        source
+            .0
+            .execute(
+                "UPDATE events SET message='after cancellation' WHERE id=1",
+                [],
+            )
+            .unwrap();
+        let busy: i64 = source
+            .0
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(busy, 0);
     }
 
     #[test]
