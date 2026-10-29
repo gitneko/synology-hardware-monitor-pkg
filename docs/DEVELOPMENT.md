@@ -32,6 +32,23 @@ package installation continue to use the package identity.
 
 ## Local checks
 
+Keep all affected Cargo lockfiles up to date when changing manifests, including
+package version bumps. The SNMP reference harness is a separate workspace whose
+optional `product-compat` dependency includes the product version in its own
+`tools/snmp-reference/Cargo.lock`; a product version bump requires refreshing
+both that file and the root `Cargo.lock`. Use Cargo to refresh the affected
+lockfiles while preserving existing registry versions, then verify resolution:
+
+```sh
+cargo metadata --locked --offline --format-version 1 > /dev/null
+cargo metadata --locked --offline --manifest-path tools/snmp-reference/Cargo.toml --features product-compat --format-version 1 > /dev/null
+```
+
+Omit `--offline` if dependencies are not cached, retaining `--locked`. Include
+the affected lockfiles with the manifest changes. The vendored upstream lockfile
+is governed by the provenance workflow below. Repository-wide agent instructions
+are recorded in `AGENTS.md`.
+
 ```sh
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
