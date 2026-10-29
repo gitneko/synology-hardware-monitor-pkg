@@ -115,12 +115,10 @@ def main():
     expected = package_assets | {'build-manifest.json', 'SHA256SUMS'}
     # Refuse stale/foreign files rather than publishing unrelated contents.
     assert all(p.is_file() and p.name in expected for p in assets.iterdir()), 'Use a clean output directory'
-    package_hashes = {algorithm: {} for algorithm in ('sha256', 'md5', 'sha1')}
-    for name in sorted(package_assets):
-        data = (assets/name).read_bytes()
-        for algorithm, hashes in package_hashes.items():
-            hashes[name] = hashlib.new(algorithm, data, usedforsecurity=False).hexdigest()
-    checksums = package_hashes['sha256']
+    # The release contains one SPK; expose its compatibility hashes as strings.
+    package_name, = package_assets
+    data = (assets/package_name).read_bytes()
+    checksums = {package_name: hashlib.sha256(data).hexdigest()}
     if source_identity() != source:
         raise ValueError('Sources changed during package inspection; rebuild')
     if env.get('GITHUB_SHA') and env['GITHUB_SHA'] != source['commit']:
@@ -132,7 +130,8 @@ def main():
                 'upgrade': json.loads(upgrade_reference.read_text()),
                 'skipped_checks': ['60-second receiver and alarm load tests'] if args.skip_load_tests else [],
                 'packages': checksums,
-                'packages_md5': package_hashes['md5'], 'packages_sha1': package_hashes['sha1'],
+                'packages_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
+                'packages_sha1': hashlib.sha1(data, usedforsecurity=False).hexdigest(),
                 'checks': ['static ELF', 'direct schema-1 upgrade/postinst/repair/DSM status', 'Redfish/TLS/CGI integration',
                     'pinned iDRAC7 TLS integration', 'SMTP/TLS/queue integration',
                     'actual static SNMP v1/v2c/v3 polling', 'actual static trap enrollment/reception',
