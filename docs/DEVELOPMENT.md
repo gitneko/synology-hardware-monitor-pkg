@@ -136,6 +136,7 @@ The JSON manifest records the source base commit (when available), dirty state/s
 In `build-manifest.json`, `packages` maps each SPK filename to its SHA-256 hash;
 the top-level `packages_md5` and `packages_sha1` fields contain plain hexadecimal hash strings for
 the single released SPK, for compatibility with tools that require those formats.
+The top-level `packages_size` field is an integer containing that SPK's size in bytes.
 
 The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py` still accepts explicit `--arch v1000` or `--arch geminilake` for focused diagnostics. Its default is `x86_64`; only the DSM 7 profile is accepted. For example, after the main build:
 

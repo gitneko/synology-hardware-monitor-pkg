@@ -132,6 +132,7 @@ def main():
                 'packages': checksums,
                 'packages_md5': hashlib.md5(data, usedforsecurity=False).hexdigest(),
                 'packages_sha1': hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+                'packages_size': len(data),
                 'checks': ['static ELF', 'direct schema-1 upgrade/postinst/repair/DSM status', 'Redfish/TLS/CGI integration',
                     'pinned iDRAC7 TLS integration', 'SMTP/TLS/queue integration',
                     'actual static SNMP v1/v2c/v3 polling', 'actual static trap enrollment/reception',
