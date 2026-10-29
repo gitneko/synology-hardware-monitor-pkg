@@ -133,6 +133,10 @@ Output in `dist/current/`:
 
 The JSON manifest records the source base commit (when available), dirty state/source content hash, package hashes, version, archive timestamp and aggregate static SNMP evidence/binary hash. Dirty local builds are reviewable but the publisher rejects them before any GitHub operation. Sources must remain stable throughout a build; if generated notices change, review them and rebuild. `snmp-reference*.json` outside `latest-assets` retains the detailed local reports. Verify release downloads with `sha256sum --check SHA256SUMS` from the asset directory. Build logs remain the detailed evidence; a manifest is not a signature or a production certification.
 
+In `build-manifest.json`, `packages` maps each SPK filename to its SHA-256 hash;
+`packages_md5` and `packages_sha1` map the same filenames to MD5 and SHA-1 hashes
+for compatibility with tools that require those formats.
+
 The supported release set contains **one DSM 7 x86_64 SPK**. `tools/build_spk.py` still accepts explicit `--arch v1000` or `--arch geminilake` for focused diagnostics. Its default is `x86_64`; only the DSM 7 profile is accepted. For example, after the main build:
 
 ```sh
